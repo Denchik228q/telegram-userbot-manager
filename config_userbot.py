@@ -1,29 +1,24 @@
-﻿# Telegram API (получи на https://my.telegram.org)
-API_ID = 30648359  # ← ЗАМЕНИ НА СВОЙ
-API_HASH = "1d1ccac98ded3ff15d050cabc65b8013"  # ← ЗАМЕНИ НА СВОЙ
+﻿import os
 
-# Бот для управления
-MANAGER_BOT_TOKEN = "7555314078:AAE7aFR3X2J2qc42XgcsXCR8wQT3IvGzdn8"
-ADMIN_ID = 7809505549
+# API данные Telegram
+API_ID = int(os.getenv('API_ID', '29648842'))
+API_HASH = os.getenv('API_HASH', '0b3fe61f73c23c27870ab93212345678')
 
-# Настройки безопасности
-MAX_MESSAGES_PER_HOUR = 30
+# Токен Manager бота
+MANAGER_BOT_TOKEN = os.getenv('MANAGER_BOT_TOKEN', '7895008595:AAH...')
+
+# ID администратора
+ADMIN_ID = int(os.getenv('ADMIN_ID', '8416385318'))
+
+# Лимиты
+DAILY_MESSAGE_LIMIT = 1000
+FLOOD_SLEEP_THRESHOLD = 60
+
+# Задержки между сообщениями (секунды)
 MIN_DELAY_BETWEEN_MESSAGES = 30
 MAX_DELAY_BETWEEN_MESSAGES = 120
 
-# Флудвейт защита
-ENABLE_FLOOD_PROTECTION = True
-FLOOD_SLEEP_THRESHOLD = 60
-
-# Лимиты безопасности
-MAX_TARGETS_PER_MAILING = 50
-DAILY_MESSAGE_LIMIT = 200
-
-# Предупреждения
-SHOW_WARNINGS = True
-REQUIRE_CONFIRMATION = True
-
-# === ПОДПИСКИ ===
+# Тарифы подписок
 SUBSCRIPTIONS = {
     'free': {
         'name': '🆓 Пробная',
@@ -58,9 +53,3 @@ SUBSCRIPTIONS = {
         'duration_days': 30
     }
 }
-
-# ID администратора (твой Telegram ID)
-ADMIN_ID = 8416385318  # ЗАМЕНИ НА СВОЙ!
-
-# Платёжные данные (для приёма оплаты)
-PAYMENT_TOKEN = "YOUR_PAYMENT_TOKEN"  # Получить на @BotFather -> /mybots -> Bot Settings -> Payments
