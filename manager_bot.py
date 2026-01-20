@@ -912,7 +912,7 @@ async def start_mailing_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
         run_mailing_background(user_id, session, targets, messages, context)
     )
     
-        await query.edit_message_text(
+    await query.edit_message_text(
         f"🚀 Рассылка запущена в фоне!\n\n"
         f"👥 Получателей: {len(targets)}\n"
         f"📝 Сообщений: {len(messages)}\n\n"
