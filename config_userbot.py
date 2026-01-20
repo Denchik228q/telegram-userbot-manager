@@ -1,8 +1,8 @@
 ﻿import os
 
 # API данные Telegram
-API_ID = int(os.getenv('API_ID', '29648842'))
-API_HASH = os.getenv('API_HASH', '0b3fe61f73c23c27870ab93212345678')
+API_ID = int(os.getenv('API_ID', '31287145'))
+API_HASH = os.getenv('API_HASH', '7fc3ca5b8471a2ad219e72fbd7db6211')
 
 # Токен Manager бота
 MANAGER_BOT_TOKEN = os.getenv('MANAGER_BOT_TOKEN', '7895008595:AAH...')
