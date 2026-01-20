@@ -34,17 +34,17 @@ def get_subscription_limits(subscription_type):
 
 
 async def check_subscription(user_id):
-"""Проверить подписку пользователя"""
-sub_type = await db.get_subscription(user_id)
-return sub_type, get_subscription_limits(sub_type)
+    """Проверить подписку пользователя"""
+    sub_type = await db.get_subscription(user_id)
+    return sub_type, get_subscription_limits(sub_type)
 
 
 async def check_user_subscriptions(user_id, context):
-"""Проверка подписки пользователя на обязательные каналы"""
-not_subscribed = []
+    """Проверка подписки пользователя на обязательные каналы"""
+    not_subscribed = []
 
-# Проверяем только публичный канал автоматически
-public_channel = "@starbombnews"
+    # Проверяем только публичный канал автоматически
+    public_channel = "@starbombnews"
 
 try:
 member = await context.bot.get_chat_member(public_channel, user_id)
