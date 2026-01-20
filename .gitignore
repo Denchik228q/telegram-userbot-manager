@@ -1,0 +1,10 @@
+.vs/
+*.session
+*.session-journal
+__pycache__/
+*.pyc
+bot.db
+bot_database.db
+sessions/
+*.log
+.env
