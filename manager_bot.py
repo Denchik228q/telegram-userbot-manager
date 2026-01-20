@@ -29,8 +29,8 @@ active_mailings = {}
 
 
 def get_subscription_limits(subscription_type):
-"""Получить лимиты подписки"""
-return SUBSCRIPTIONS.get(subscription_type, SUBSCRIPTIONS['free'])
+    """Получить лимиты подписки"""
+    return SUBSCRIPTIONS.get(subscription_type, SUBSCRIPTIONS['free'])
 
 
 async def check_subscription(user_id):
