@@ -1,10 +1,40 @@
-.vs/
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+
+# Database
+*.db
+*.db-journal
 *.session
 *.session-journal
-__pycache__/
-*.pyc
-bot.db
-bot_database.db
+
+# Sessions
 sessions/
+*.session
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Backups
+backup*/
+*_old.py
+*_backup.py
+
+# Logs
 *.log
+
+# Env
 .env
