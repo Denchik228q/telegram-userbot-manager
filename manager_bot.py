@@ -49,6 +49,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"📝 Макс. сообщений: {limits['max_messages']}\n"
         f"👥 Макс. получателей: {limits['max_targets']}\n\n"
         f"⚠️ ВНИМАНИЕ! Использование на свой риск!\n"
+        f"• Возможен бан аккаунта\n"
         f"• Не спамьте незнакомым людям\n"
         f"• Соблюдайте лимиты Telegram\n\n"
         f"Выберите действие:"
@@ -217,6 +218,7 @@ async def create_mailing_start(update: Update, context: ContextTypes.DEFAULT_TYP
     
     await query.edit_message_text(text)
     return MAILING_TARGETS
+
 
 async def receive_targets(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Получение списка получателей"""
@@ -493,7 +495,7 @@ async def show_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     keyboard = [[InlineKeyboardButton("◀️ Назад", callback_data="back_to_menu")]]
     
-    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+        await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
 
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -540,69 +542,12 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 
-def main():
-    """Запуск бота"""
-    logger.info("🚀 Manager Bot started!")
-    
-    app = Application.builder().token(MANAGER_BOT_TOKEN).build()
-    
-    # ConversationHandler для подключения аккаунта
-    connect_conv = ConversationHandler(
-        entry_points=[CallbackQueryHandler(connect_account_start, pattern="^connect_account$")],
-        states={
-            PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_phone)],
-            CODE: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_code)],
-            PASSWORD_2FA: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_2fa_password)],
-        },
-        fallbacks=[CommandHandler("cancel", cancel)],
-        per_message=False
-    )
-    
-    # ConversationHandler для рассылки
-    mailing_conv = ConversationHandler(
-        entry_points=[CallbackQueryHandler(create_mailing_start, pattern="^create_mailing$")],
-        states={
-            MAILING_TARGETS: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_targets)],
-            MAILING_MESSAGES: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_messages)],
-            MAILING_CONFIRM: [CallbackQueryHandler(confirm_mailing, pattern="^(confirm|cancel)_mailing$")],
-        },
-        fallbacks=[CommandHandler("cancel", cancel)],
-        per_message=False
-    )
-    
-    # ConversationHandler для поддержки
-    support_conv = ConversationHandler(
-        entry_points=[CallbackQueryHandler(support_start, pattern="^support$")],
-        states={
-            SUPPORT_MESSAGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_support_message)],
-},
-fallbacks=[CommandHandler("cancel", cancel)],
-per_message=False
-)
-
-app.add_handler(CommandHandler("start", start))
-app.add_handler(connect_conv)
-app.add_handler(mailing_conv)
-app.add_handler(support_conv)
-app.add_handler(CallbackQueryHandler(show_subscriptions, pattern="^subscriptions$"))
-app.add_handler(CallbackQueryHandler(show_stats, pattern="^stats$"))
-app.add_handler(CallbackQueryHandler(show_help, pattern="^help$"))
-app.add_handler(CallbackQueryHandler(show_subscription_details, pattern="^sub_"))
-app.add_handler(CallbackQueryHandler(back_to_menu, pattern="^back_to_menu$"))
-app.add_error_handler(error_handler)
-
-logger.info(f"📋 Subscriptions available: {len(SUBSCRIPTIONS)}")
-logger.info(f"👤 Admin ID: {ADMIN_ID}")
-
-app.run_polling(allowed_updates=Update.ALL_TYPES)
-
-
 async def init_and_run():
     """Инициализация и запуск"""
     await db.connect()
-
+    
     app = Application.builder().token(MANAGER_BOT_TOKEN).build()
-
+    
     # ConversationHandler для подключения аккаунта
     connect_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(connect_account_start, pattern="^connect_account$")],
@@ -614,7 +559,7 @@ async def init_and_run():
         fallbacks=[CommandHandler("cancel", cancel)],
         per_message=False
     )
-
+    
     # ConversationHandler для рассылки
     mailing_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(create_mailing_start, pattern="^create_mailing$")],
@@ -626,7 +571,7 @@ async def init_and_run():
         fallbacks=[CommandHandler("cancel", cancel)],
         per_message=False
     )
-
+    
     # ConversationHandler для поддержки
     support_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(support_start, pattern="^support$")],
@@ -636,7 +581,8 @@ async def init_and_run():
         fallbacks=[CommandHandler("cancel", cancel)],
         per_message=False
     )
-
+    
+    # Регистрация handlers
     app.add_handler(CommandHandler("start", start))
     app.add_handler(connect_conv)
     app.add_handler(mailing_conv)
@@ -647,18 +593,26 @@ async def init_and_run():
     app.add_handler(CallbackQueryHandler(show_subscription_details, pattern="^sub_"))
     app.add_handler(CallbackQueryHandler(back_to_menu, pattern="^back_to_menu$"))
     app.add_error_handler(error_handler)
-
+    
     logger.info(f"🚀 Manager Bot started!")
     logger.info(f"📋 Subscriptions available: {len(SUBSCRIPTIONS)}")
     logger.info(f"👤 Admin ID: {ADMIN_ID}")
-
+    
+    # Запуск бота
     await app.initialize()
     await app.start()
     await app.updater.start_polling(allowed_updates=Update.ALL_TYPES)
-
+    
     # Держим бота запущенным
-    while True:
-        await asyncio.sleep(1)
+    try:
+        while True:
+            await asyncio.sleep(1)
+    except KeyboardInterrupt:
+        logger.info("🛑 Stopping bot...")
+    finally:
+        await app.stop()
+        await app.shutdown()
+        await db.close()
 
 
 if __name__ == '__main__':
