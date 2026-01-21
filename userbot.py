@@ -46,15 +46,33 @@ class UserbotSession:
         logger.info(f"🛑 Mailing cancelled for {self.phone}")
     
     async def send_code_request(self):
-        """Отправка кода авторизации"""
-        try:
+    """Отправка кода авторизации"""
+    try:
+        logger.info(f"🔑 Using API_ID: {API_ID}")
+        logger.info(f"📞 Phone: {self.phone}")
+        
+        if not self.client.is_connected():
+            logger.info("📡 Connecting to Telegram...")
             await self.client.connect()
-            result = await self.client.send_code_request(self.phone)
-            logger.info(f"✅ Code sent to {self.phone}")
-            return True, result.phone_code_hash
-        except Exception as e:
-            logger.error(f"❌ Send code error: {e}")
-            return False, str(e)
+            logger.info("✅ Connected!")
+        
+        logger.info(f"📤 Requesting code for {self.phone}")
+        result = await self.client.send_code_request(self.phone)
+        
+        # НОВОЕ: Больше информации
+        logger.info(f"✅ Code sent!")
+        logger.info(f"📋 Type: {result.type}")  # ← Покажет куда отправлен код
+        logger.info(f"📋 Next type: {result.next_type}")
+        logger.info(f"📋 Timeout: {result.timeout}")
+        logger.info(f"📋 Phone hash: {result.phone_code_hash[:15]}...")
+        
+        return True, result.phone_code_hash
+        
+    except Exception as e:
+        logger.error(f"❌ Error: {e}")
+        import traceback
+        traceback.print_exc()
+        return False, str(e)
     
     async def sign_in(self, code, phone_hash):
         """Вход с кодом"""
