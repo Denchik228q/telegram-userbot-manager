@@ -511,7 +511,7 @@ async def confirm_mailing(update: Update, context: ContextTypes.DEFAULT_TYPE):
     session = manager.get_session(user_id)
     if not session:
                 await query.edit_message_text("❌ Сессия не найдена.\n\n/start")
-        return ConversationHandler.END
+                return ConversationHandler.END
     
     mailing_id = await db.add_mailing(user_id, len(targets), len(messages))
     
