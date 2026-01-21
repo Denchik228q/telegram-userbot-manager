@@ -1,11 +1,11 @@
 ﻿import os
 
 # API данные Telegram
-API_ID = int(os.getenv('API_ID', '29648842'))
-API_HASH = os.getenv('API_HASH', '0b3fe61f73c23c27870ab93212345678')
+API_ID = int(os.getenv('API_ID', '32052311'))
+API_HASH = os.getenv('API_HASH', '7f3947e9a7d911cc83793f21c18cb7c8')
 
 # Токен Manager бота
-MANAGER_BOT_TOKEN = os.getenv('MANAGER_BOT_TOKEN', '7895008595:AAH4i8JVP9bkfMvH6R_iZKx9k4sKoGmTbMI')
+MANAGER_BOT_TOKEN = os.getenv('MANAGER_BOT_TOKEN', '7555314078:AAE7aFR3X2J2qc42XgcsXCR8wQT3IvGzdn8')
 
 # ID администратора
 ADMIN_ID = int(os.getenv('ADMIN_ID', '8416385318'))
@@ -17,12 +17,10 @@ SESSIONS_DIR = os.getenv('SESSIONS_DIR', './sessions')
 if not os.path.exists(SESSIONS_DIR):
     os.makedirs(SESSIONS_DIR)
     print(f"📁 Sessions directory created: {SESSIONS_DIR}")
-else:
-    print(f"📁 Sessions directory: {SESSIONS_DIR}")
 
 # Обязательные каналы для подписки
 REQUIRED_CHANNELS = [
-    "@starbombnews",  # Публичный канал
+    "@starbombnews",
 ]
 
 # Ссылка на приватный канал
@@ -72,10 +70,9 @@ SUBSCRIPTIONS = {
 PAYMENT_DETAILS = """
 💳 Реквизиты для оплаты:
 
-• Карта:2200153683704721
+• Сбербанк: 2200 1536 8370 4721
 • ЮMoney: 4100118589897796
 • USDT (TRC20): TD5EJBjQ3zM2SpgLCaBf4XptT7CoAFWPQr
 
 После оплаты отправьте чек поддержке
-
 """
