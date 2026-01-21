@@ -12,6 +12,11 @@ from config_userbot import (
     MANAGER_BOT_TOKEN, ADMIN_ID, SUBSCRIPTIONS, 
     REQUIRED_CHANNELS, PRIVATE_CHANNEL_LINK, PAYMENT_DETAILS
 )
+from admin_commands import (
+    admin_panel, admin_stats, admin_users, admin_subscriptions,
+    admin_broadcast_menu, admin_support, admin_logs, admin_back,
+    activate_subscription, broadcast_message, reply_support
+)
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -23,12 +28,71 @@ logger = logging.getLogger(__name__)
 PHONE, CODE, PASSWORD_2FA = range(3)
 MAILING_TARGETS, MAILING_MESSAGES, MAILING_CONFIRM = range(3, 6)
 SUPPORT_MESSAGE = 6
+PAYMENT_PROOF = 7
+
+
+async def check_subscription_channels(user_id: int, context: ContextTypes.DEFAULT_TYPE):
+    """Проверка подписки на каналы"""
+    not_subscribed = []
+    
+    for channel in REQUIRED_CHANNELS:
+        try:
+            member = await context.bot.get_chat_member(channel, user_id)
+            if member.status not in ['member', 'administrator', 'creator']:
+                not_subscribed.append(channel)
+        except Exception as e:
+            logger.error(f"Error checking subscription: {e}")
+            not_subscribed.append(channel)
+    
+    return not_subscribed
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Команда /start"""
+    """Команда /start с проверкой подписки"""
     user = update.effective_user
     
+    # Проверка подписки на публичные каналы
+    not_subscribed = await check_subscription_channels(user.id, context)
+    
+    if not_subscribed:
+        keyboard = []
+        for channel in not_subscribed:
+            keyboard.append([InlineKeyboardButton(f"Подписаться на {channel}", url=f"https://t.me/{channel.replace('@', '')}")])
+        
+        keyboard.append([InlineKeyboardButton("✅ Я подписался", callback_data="check_subscription")])
+        
+        await update.message.reply_text(
+            f"👋 Привет, {user.first_name}!\n\n"
+            f"Для использования бота необходимо подписаться на каналы:\n"
+            f"{''.join([f'• {ch}' + chr(10) for ch in not_subscribed])}\n"
+            f"После подписки нажмите кнопку ниже:",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        return
+    
+    # Проверка подписки на приватный канал
+    cursor = await db.db.execute(
+        'SELECT private_channel_approved FROM users WHERE user_id = ?',
+        (user.id,)
+    )
+    result = await cursor.fetchone()
+    
+    if not result or not result[0]:
+        keyboard = [
+            [InlineKeyboardButton("📱 Подписаться на приватный канал", url=PRIVATE_CHANNEL_LINK)],
+            [InlineKeyboardButton("✅ Я подписался (ожидание проверки)", callback_data="request_approval")]
+        ]
+        
+        await update.message.reply_text(
+            f"👋 Привет, {user.first_name}!\n\n"
+            f"Последний шаг - подпишитесь на приватный канал.\n"
+            f"После подписки нажмите кнопку ниже.\n\n"
+            f"Админ проверит подписку и одобрит доступ.",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        return
+    
+    # Регистрация и показ главного меню
     await db.register_user(user.id, user.username or user.first_name)
     sub_type, limits = await db.check_subscription(user.id)
     
@@ -49,13 +113,147 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"📝 Макс. сообщений: {limits['max_messages']}\n"
         f"👥 Макс. получателей: {limits['max_targets']}\n\n"
         f"⚠️ ВНИМАНИЕ! Использование на свой риск!\n"
-        f"• Возможен бан аккаунта\n"
         f"• Не спамьте незнакомым людям\n"
         f"• Соблюдайте лимиты Telegram\n\n"
         f"Выберите действие:"
     )
     
     await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+
+
+async def check_subscription_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Проверка подписки на публичные каналы"""
+    query = update.callback_query
+    await query.answer()
+    user = query.from_user
+    
+    not_subscribed = await check_subscription_channels(user.id, context)
+    
+    if not_subscribed:
+        await query.answer("❌ Вы ещё не подписались на все каналы!", show_alert=True)
+        return
+    
+    # Проверка приватного канала
+    cursor = await db.db.execute(
+        'SELECT private_channel_approved FROM users WHERE user_id = ?',
+        (user.id,)
+    )
+    result = await cursor.fetchone()
+    
+    if not result or not result[0]:
+        keyboard = [
+            [InlineKeyboardButton("📱 Подписаться на приватный канал", url=PRIVATE_CHANNEL_LINK)],
+            [InlineKeyboardButton("✅ Я подписался (ожидание проверки)", callback_data="request_approval")]
+        ]
+        
+        await query.edit_message_text(
+            f"✅ Подписка на публичные каналы подтверждена!\n\n"
+            f"Теперь подпишитесь на приватный канал.\n"
+            f"После подписки нажмите кнопку ниже.",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+    else:
+        await query.message.reply_text("✅ Проверка пройдена! Используйте /start")
+
+
+async def request_approval(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Запрос одобрения приватного канала"""
+    query = update.callback_query
+    await query.answer()
+    user = query.from_user
+    
+    # Сохраняем запрос
+    await db.db.execute(
+        'UPDATE users SET private_channel_requested = 1 WHERE user_id = ?',
+        (user.id,)
+    )
+    await db.db.commit()
+    
+    # Уведомление админу
+    keyboard = [
+        [InlineKeyboardButton("✅ Одобрить", callback_data=f"approve_private_{user.id}")],
+        [InlineKeyboardButton("❌ Отклонить", callback_data=f"reject_private_{user.id}")]
+    ]
+    
+    try:
+        await context.bot.send_message(
+            ADMIN_ID,
+            f"📱 Новый запрос на доступ к приватному каналу\n\n"
+            f"👤 User ID: {user.id}\n"
+            f"📝 Username: @{user.username or 'нет'}\n"
+            f"👤 Имя: {user.first_name}\n\n"
+            f"Проверьте подписку и одобрите доступ:",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+    except Exception as e:
+        logger.error(f"Failed to notify admin: {e}")
+    
+    await query.edit_message_text(
+        "⏳ Запрос отправлен администратору!\n\n"
+        "Вы получите уведомление после проверки.\n"
+        "Обычно это занимает до 24 часов."
+    )
+
+
+async def approve_private_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Одобрение доступа к приватному каналу"""
+    query = update.callback_query
+    await query.answer()
+    
+    if query.from_user.id != ADMIN_ID:
+        return
+    
+    user_id = int(query.data.split("_")[2])
+    
+    await db.db.execute(
+        'UPDATE users SET private_channel_approved = 1 WHERE user_id = ?',
+        (user_id,)
+    )
+    await db.db.commit()
+    
+    # Уведомление пользователю
+    try:
+        await context.bot.send_message(
+            user_id,
+            "✅ Доступ к приватному каналу одобрен!\n\n"
+            "Теперь вы можете использовать бота.\n"
+            "Отправьте /start"
+        )
+    except:
+        pass
+    
+    await query.edit_message_text(
+        f"{query.message.text}\n\n"
+        f"✅ ОДОБРЕНО"
+    )
+
+
+async def reject_private_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Отклонение доступа"""
+    query = update.callback_query
+    await query.answer()
+    
+    if query.from_user.id != ADMIN_ID:
+        return
+    
+    user_id = int(query.data.split("_")[2])
+    
+    try:
+        await context.bot.send_message(
+            user_id,
+            "❌ Доступ к приватному каналу отклонён.\n\n"
+            "Возможные причины:\n"
+            "• Не подписались на канал\n"
+            "• Нарушение правил\n\n"
+            "Свяжитесь с поддержкой: /support"
+        )
+    except:
+        pass
+    
+    await query.edit_message_text(
+        f"{query.message.text}\n\n"
+        f"❌ ОТКЛОНЕНО"
+    )
 
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -290,7 +488,7 @@ async def receive_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"👥 Получателей: {len(targets)}\n"
         f"💬 Сообщений: {len(messages)}\n"
         f"📮 Всего отправок: {total}\n\n"
-        f"⚠️ Задержка между сообщениями: 60-180 сек\n\n"
+        f"⚠️ Задержка между сообщениями: 20-60 сек\n\n"
         f"Начать рассылку?",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
@@ -312,7 +510,7 @@ async def confirm_mailing(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     session = manager.get_session(user_id)
     if not session:
-        await query.edit_message_text("❌ Сессия не найдена.\n\n/start")
+                await query.edit_message_text("❌ Сессия не найдена.\n\n/start")
         return ConversationHandler.END
     
     mailing_id = await db.add_mailing(user_id, len(targets), len(messages))
@@ -366,13 +564,16 @@ async def show_subscriptions(update: Update, context: ContextTypes.DEFAULT_TYPE)
     keyboard = []
     
     for key, sub in SUBSCRIPTIONS.items():
+        if key == 'trial':
+            continue
+        
         text += f"{sub['name']}\n"
         text += f"💰 {sub['price']} руб/мес\n"
         text += f"📊 {sub['daily_limit']} сообщений/день\n"
         text += f"📝 {sub['max_messages']} сообщений за раз\n"
         text += f"👥 {sub['max_targets']} получателей\n\n"
         
-        keyboard.append([InlineKeyboardButton(sub['name'], callback_data=f"sub_{key}")])
+        keyboard.append([InlineKeyboardButton(f"Купить {sub['name']}", callback_data=f"sub_{key}")])
     
     keyboard.append([InlineKeyboardButton("◀️ Назад", callback_data="back_to_menu")])
     
@@ -380,7 +581,7 @@ async def show_subscriptions(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 
 async def show_subscription_details(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Детали подписки"""
+    """Детали подписки с кнопкой оплаты"""
     query = update.callback_query
     await query.answer()
     
@@ -398,12 +599,183 @@ async def show_subscription_details(update: Update, context: ContextTypes.DEFAUL
         f"📝 Макс. сообщений: {sub['max_messages']}\n"
         f"👥 Макс. получателей: {sub['max_targets']}\n\n"
         f"{sub['description']}\n\n"
-        f"{PAYMENT_DETAILS}"
+        f"{PAYMENT_DETAILS}\n\n"
+        f"⚠️ После оплаты нажмите кнопку ниже!"
     )
     
-    keyboard = [[InlineKeyboardButton("◀️ Назад", callback_data="subscriptions")]]
+    keyboard = [
+        [InlineKeyboardButton("✅ Я оплатил", callback_data=f"paid_{sub_key}")],
+        [InlineKeyboardButton("◀️ Назад", callback_data="subscriptions")]
+    ]
     
     await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+
+
+async def payment_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Подтверждение оплаты"""
+    query = update.callback_query
+    await query.answer()
+    
+    user = query.from_user
+    sub_key = query.data.replace("paid_", "")
+    sub = SUBSCRIPTIONS.get(sub_key)
+    
+    if not sub:
+        return
+    
+    # Сохраняем запрос на оплату
+    context.user_data['pending_subscription'] = sub_key
+    
+    await query.edit_message_text(
+        f"📸 Отправьте скриншот или чек оплаты\n\n"
+        f"Подписка: {sub['name']}\n"
+        f"Сумма: {sub['price']} руб\n\n"
+        f"После отправки чека, администратор проверит оплату\n"
+        f"и активирует подписку.\n\n"
+        f"/cancel - отмена"
+    )
+    
+    return PAYMENT_PROOF
+
+
+async def receive_payment_proof(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Получение чека оплаты"""
+    user = update.effective_user
+    sub_key = context.user_data.get('pending_subscription')
+    
+    if not sub_key:
+        await update.message.reply_text("❌ Ошибка. Начните с /start")
+        return ConversationHandler.END
+    
+    sub = SUBSCRIPTIONS.get(sub_key)
+    
+    # Получаем фото
+    if update.message.photo:
+        photo = update.message.photo[-1]
+        file_id = photo.file_id
+    elif update.message.document:
+        file_id = update.message.document.file_id
+    else:
+        await update.message.reply_text("❌ Отправьте фото или документ с чеком")
+        return PAYMENT_PROOF
+    
+    # Уведомление админу с кнопкой активации
+    keyboard = [
+        [InlineKeyboardButton("✅ Активировать подписку", callback_data=f"activate_payment_{user.id}_{sub_key}")],
+        [InlineKeyboardButton("❌ Отклонить", callback_data=f"reject_payment_{user.id}")]
+    ]
+    
+    try:
+        if update.message.photo:
+            await context.bot.send_photo(
+                ADMIN_ID,
+                photo=file_id,
+                caption=(
+                    f"💳 Новый платёж!\n\n"
+                    f"👤 User ID: {user.id}\n"
+                    f"📝 Username: @{user.username or 'нет'}\n"
+                    f"👤 Имя: {user.first_name}\n\n"
+                    f"📦 Подписка: {sub['name']}\n"
+                    f"💰 Сумма: {sub['price']} руб\n\n"
+                    f"Для активации используйте:\n"
+                    f"/activate {user.id} {sub_key}"
+                ),
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+        else:
+            await context.bot.send_document(
+                ADMIN_ID,
+                document=file_id,
+                caption=(
+                    f"💳 Новый платёж!\n\n"
+                    f"👤 User ID: {user.id}\n"
+                    f"📝 Username: @{user.username or 'нет'}\n"
+                    f"👤 Имя: {user.first_name}\n\n"
+                    f"📦 Подписка: {sub['name']}\n"
+                    f"💰 Сумма: {sub['price']} руб\n\n"
+                    f"Для активации используйте:\n"
+                    f"/activate {user.id} {sub_key}"
+                ),
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+    except Exception as e:
+        logger.error(f"Failed to notify admin: {e}")
+    
+    await update.message.reply_text(
+        "✅ Чек отправлен администратору!\n\n"
+        "⏳ Ожидайте проверки и активации подписки.\n"
+        "Обычно это занимает до 24 часов.\n\n"
+        "Вы получите уведомление после активации.\n\n"
+        "/start"
+    )
+    
+    return ConversationHandler.END
+
+
+async def activate_payment_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Активация подписки по кнопке"""
+    query = update.callback_query
+    await query.answer()
+    
+    if query.from_user.id != ADMIN_ID:
+        return
+    
+    parts = query.data.split("_")
+    user_id = int(parts[2])
+    sub_key = parts[3]
+    
+    success = await db.activate_subscription(user_id, sub_key)
+    
+    if success:
+        sub = SUBSCRIPTIONS[sub_key]
+        
+        # Уведомление пользователю
+        try:
+            await context.bot.send_message(
+                user_id,
+                f"🎉 Подписка активирована!\n\n"
+                f"Тариф: {sub['name']}\n"
+                f"Срок: {sub['duration_days']} дней\n"
+                f"Лимит: {sub['daily_limit']} сообщений/день\n\n"
+                f"Спасибо за покупку! 💚\n\n"
+                f"/start"
+            )
+        except:
+            pass
+        
+        await query.edit_message_caption(
+            caption=f"{query.message.caption}\n\n✅ АКТИВИРОВАНО"
+        )
+    else:
+        await query.answer("❌ Ошибка активации", show_alert=True)
+
+
+async def reject_payment_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Отклонение платежа"""
+    query = update.callback_query
+    await query.answer()
+    
+    if query.from_user.id != ADMIN_ID:
+        return
+    
+    user_id = int(query.data.split("_")[2])
+    
+    try:
+        await context.bot.send_message(
+            user_id,
+            "❌ Ваш платёж отклонён.\n\n"
+            "Возможные причины:\n"
+            "• Неверная сумма\n"
+            "• Некорректный чек\n"
+            "• Дубликат платежа\n\n"
+            "Свяжитесь с поддержкой: /support"
+        )
+    except:
+        pass
+    
+    await query.edit_message_caption(
+        caption=f"{query.message.caption}\n\n❌ ОТКЛОНЕНО"
+    )
 
 
 async def show_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -546,6 +918,14 @@ async def init_and_run():
     """Инициализация и запуск"""
     await db.connect()
     
+    # Добавляем недостающие колонки в базу
+    try:
+        await db.db.execute('ALTER TABLE users ADD COLUMN private_channel_approved BOOLEAN DEFAULT 0')
+        await db.db.execute('ALTER TABLE users ADD COLUMN private_channel_requested BOOLEAN DEFAULT 0')
+        await db.db.commit()
+    except:
+        pass
+    
     app = Application.builder().token(MANAGER_BOT_TOKEN).build()
     
     # ConversationHandler для подключения аккаунта
@@ -582,11 +962,48 @@ async def init_and_run():
         per_message=False
     )
     
-    # Регистрация handlers
+    # ConversationHandler для оплаты
+    payment_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(payment_confirmation, pattern="^paid_")],
+        states={
+            PAYMENT_PROOF: [MessageHandler((filters.PHOTO | filters.Document.IMAGE) & ~filters.COMMAND, receive_payment_proof)],
+        },
+        fallbacks=[CommandHandler("cancel", cancel)],
+        per_message=False
+    )
+    
+    # Админ команды
+    app.add_handler(CommandHandler("admin", admin_panel))
+    app.add_handler(CommandHandler("activate", activate_subscription))
+    app.add_handler(CommandHandler("broadcast", broadcast_message))
+    app.add_handler(CommandHandler("reply", reply_support))
+    
+    # Админ callback handlers
+    app.add_handler(CallbackQueryHandler(admin_stats, pattern="^admin_stats$"))
+    app.add_handler(CallbackQueryHandler(admin_users, pattern="^admin_users$"))
+    app.add_handler(CallbackQueryHandler(admin_subscriptions, pattern="^admin_subscriptions$"))
+    app.add_handler(CallbackQueryHandler(admin_broadcast_menu, pattern="^admin_broadcast$"))
+    app.add_handler(CallbackQueryHandler(admin_support, pattern="^admin_support$"))
+    app.add_handler(CallbackQueryHandler(admin_logs, pattern="^admin_logs$"))
+    app.add_handler(CallbackQueryHandler(admin_back, pattern="^admin_back$"))
+    
+    # Callback для одобрения приватного канала
+    app.add_handler(CallbackQueryHandler(approve_private_channel, pattern="^approve_private_"))
+    app.add_handler(CallbackQueryHandler(reject_private_channel, pattern="^reject_private_"))
+    
+    # Callback для оплаты
+    app.add_handler(CallbackQueryHandler(activate_payment_callback, pattern="^activate_payment_"))
+    app.add_handler(CallbackQueryHandler(reject_payment_callback, pattern="^reject_payment_"))
+    
+    # Проверка подписки
+    app.add_handler(CallbackQueryHandler(check_subscription_callback, pattern="^check_subscription$"))
+    app.add_handler(CallbackQueryHandler(request_approval, pattern="^request_approval$"))
+        # Регистрация handlers
     app.add_handler(CommandHandler("start", start))
     app.add_handler(connect_conv)
     app.add_handler(mailing_conv)
     app.add_handler(support_conv)
+    app.add_handler(payment_conv)
     app.add_handler(CallbackQueryHandler(show_subscriptions, pattern="^subscriptions$"))
     app.add_handler(CallbackQueryHandler(show_stats, pattern="^stats$"))
     app.add_handler(CallbackQueryHandler(show_help, pattern="^help$"))
