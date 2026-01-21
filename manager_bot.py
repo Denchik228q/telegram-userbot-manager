@@ -340,7 +340,7 @@ async def payment_confirmation(update: Update, context: ContextTypes.DEFAULT_TYP
         "Обычно это занимает до 30 минут.\n\n"
         "Вы получите уведомление когда подписка будет активирована."
     )
-        return
+    return
     
     # Отправка заявки админу
     try:
