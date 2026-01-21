@@ -28,16 +28,8 @@ FLOOD_SLEEP_THRESHOLD = 60
 
 # Задержки между сообщениями (секунды)
 # Увеличь эти значения при большом наплыве пользователей
-MIN_DELAY_BETWEEN_MESSAGES = 60    # 1 минута (безопасно)
-MAX_DELAY_BETWEEN_MESSAGES = 180   # 3 минуты (безопасно)
-
-# Для более агрессивной рассылки (РИСКОВАННО!):
-# MIN_DELAY_BETWEEN_MESSAGES = 30
-# MAX_DELAY_BETWEEN_MESSAGES = 90
-
-# Для максимальной безопасности:
-# MIN_DELAY_BETWEEN_MESSAGES = 120
-# MAX_DELAY_BETWEEN_MESSAGES = 300
+MIN_DELAY_BETWEEN_MESSAGES = 20    # 1 минута (безопасно)
+MAX_DELAY_BETWEEN_MESSAGES = 60   # 3 минуты (безопасно)
 
 # Тарифы подписок
 SUBSCRIPTIONS = {
