@@ -239,6 +239,10 @@ class Database:
             logger.info(f"✅ Support message added from {user_id}")
         except Exception as e:
             logger.error(f"❌ Add support message error: {e}")
+
+    async def add_user(self, user_id: int, username: str):
+        """Алиас для register_user"""
+        await self.register_user(user_id, username)
     
     async def close(self):
         """Закрытие соединения"""
