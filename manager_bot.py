@@ -205,11 +205,12 @@ async def approve_private_channel(update: Update, context: ContextTypes.DEFAULT_
     
     user_id = int(query.data.split("_")[2])
     
-    await db.db.execute(
-        'UPDATE users SET private_channel_approved = 1 WHERE user_id = ?',
-        (user_id,)
-    )
-    await db.db.commit()
+    # Используем функцию из database.py
+    success = await db.approve_private_channel(user_id)
+    
+    if not success:
+        await query.answer("❌ Ошибка одобрения", show_alert=True)
+        return
     
     # Уведомление пользователю
     try:
