@@ -30,7 +30,7 @@ active_mailings = {}
 
 def get_subscription_limits(subscription_type):
     """Получить лимиты подписки"""
-    return SUBSCRIPTIONS.get(subscription_type, SUBSCRIPTIONS['free'])
+    return SUBSCRIPTIONS.get(subscription_type, SUBSCRIPTIONS['trial'])
 
 
 async def check_subscription(user_id):
@@ -108,7 +108,7 @@ async def subscriptions_menu(update: Update, context: ContextTypes.DEFAULT_TYPE)
     keyboard = []
     for sub_key, sub_data in SUBSCRIPTIONS.items():
         # Проверка пробной подписки
-        if sub_key == 'free' and trial_used:
+        if sub_key == 'trial' and trial_used:
             status = "❌ Использована"
             callback = "trial_used"
         elif current_sub == sub_key:
