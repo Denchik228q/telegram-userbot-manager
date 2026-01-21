@@ -174,7 +174,7 @@ async def request_approval(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     user = query.from_user
     
-    # Проверяем не одобрен ли уже
+    # Проверяем статус
     approved, requested = await db.check_private_channel_status(user.id)
     
     if approved:
@@ -185,14 +185,12 @@ async def request_approval(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer("⏳ Запрос уже отправлен!", show_alert=True)
         return
     
-    # Сохраняем запрос
-    await db.db.execute(
-        'UPDATE users SET private_channel_requested = 1 WHERE user_id = ?',
-        (user.id,)
-    )
-    await db.db.commit()
+    # Сохраняем запрос через функцию БД
+    success = await db.request_private_channel(user.id)
     
-    logger.info(f"User {user.id} requested private channel approval")
+    if not success:
+        await query.answer("❌ Ошибка запроса", show_alert=True)
+        return
     
     # Уведомление админу
     keyboard = [
@@ -216,8 +214,7 @@ async def request_approval(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text(
         "⏳ Запрос отправлен администратору!\n\n"
         "Вы получите уведомление после проверки.\n"
-        "Обычно это занимает до 24 часов.\n\n"
-        "Я сообщу вам когда доступ будет одобрен!"
+        "Обычно это занимает до 24 часов."
     )
 
 

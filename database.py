@@ -20,6 +20,7 @@ class Database:
     
     async def create_tables(self):
         """Создание таблиц"""
+        # Создаём таблицу пользователей
         await self.db.execute('''
             CREATE TABLE IF NOT EXISTS users (
                 user_id INTEGER PRIMARY KEY,
@@ -28,23 +29,26 @@ class Database:
                 subscription_type TEXT DEFAULT 'trial',
                 subscription_expires TEXT,
                 is_active BOOLEAN DEFAULT 1,
-                private_channel_approved BOOLEAN DEFAULT 0,
-                private_channel_requested BOOLEAN DEFAULT 0,
+                private_channel_approved INTEGER DEFAULT 0,
+                private_channel_requested INTEGER DEFAULT 0,
                 registered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
         
-        # Миграция: добавляем колонки если их нет
-        try:
-            await self.db.execute('ALTER TABLE users ADD COLUMN private_channel_approved BOOLEAN DEFAULT 0')
-        except:
-            pass
+        # Проверяем наличие колонок и добавляем при необходимости
+        cursor = await self.db.execute("PRAGMA table_info(users)")
+        columns = await cursor.fetchall()
+        column_names = [col[1] for col in columns]
         
-        try:
-            await self.db.execute('ALTER TABLE users ADD COLUMN private_channel_requested BOOLEAN DEFAULT 0')
-        except:
-            pass
+        if 'private_channel_approved' not in column_names:
+            await self.db.execute('ALTER TABLE users ADD COLUMN private_channel_approved INTEGER DEFAULT 0')
+            logger.info("✅ Added column: private_channel_approved")
         
+        if 'private_channel_requested' not in column_names:
+            await self.db.execute('ALTER TABLE users ADD COLUMN private_channel_requested INTEGER DEFAULT 0')
+            logger.info("✅ Added column: private_channel_requested")
+        
+        # Создаём таблицу рассылок
         await self.db.execute('''
             CREATE TABLE IF NOT EXISTS mailings (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -60,19 +64,20 @@ class Database:
             )
         ''')
         
+        # Создаём таблицу поддержки
         await self.db.execute('''
             CREATE TABLE IF NOT EXISTS support_messages (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER,
                 message TEXT,
-                is_answered BOOLEAN DEFAULT 0,
+                is_answered INTEGER DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (user_id) REFERENCES users(user_id)
             )
         ''')
         
         await self.db.commit()
-        logger.info("✅ Tables created")
+        logger.info("✅ Tables created/updated")
     
     async def register_user(self, user_id: int, username: str):
         """Регистрация пользователя"""
@@ -82,6 +87,7 @@ class Database:
                 VALUES (?, ?)
             ''', (user_id, username))
             await self.db.commit()
+            logger.info(f"✅ User registered: {user_id}")
             return True
         except Exception as e:
             logger.error(f"Error registering user: {e}")
@@ -116,15 +122,18 @@ class Database:
         
         # Проверка срока действия
         if expires:
-            expire_date = datetime.fromisoformat(expires)
-            if datetime.now() > expire_date:
-                # Подписка истекла
-                await self.db.execute('''
-                    UPDATE users SET subscription_type = 'trial' 
-                    WHERE user_id = ?
-                ''', (user_id,))
-                await self.db.commit()
-                return 'trial', SUBSCRIPTIONS['trial']
+            try:
+                expire_date = datetime.fromisoformat(expires)
+                if datetime.now() > expire_date:
+                    # Подписка истекла
+                    await self.db.execute('''
+                        UPDATE users SET subscription_type = 'trial' 
+                        WHERE user_id = ?
+                    ''', (user_id,))
+                    await self.db.commit()
+                    return 'trial', SUBSCRIPTIONS['trial']
+            except:
+                pass
         
         return sub_type, SUBSCRIPTIONS.get(sub_type, SUBSCRIPTIONS['trial'])
     
@@ -145,6 +154,75 @@ class Database:
             return True
         except Exception as e:
             logger.error(f"Error activating subscription: {e}")
+            return False
+    
+    async def check_private_channel_status(self, user_id: int):
+        """Проверка статуса приватного канала"""
+        try:
+            cursor = await self.db.execute('''
+                SELECT private_channel_approved, private_channel_requested
+                FROM users WHERE user_id = ?
+            ''', (user_id,))
+            
+            result = await cursor.fetchone()
+            
+            if not result:
+                # Пользователь не найден - регистрируем
+                await self.register_user(user_id, str(user_id))
+                return False, False
+            
+            approved = bool(result[0])
+            requested = bool(result[1])
+            
+            logger.info(f"🔍 User {user_id} status from DB: approved={result[0]}, requested={result[1]}")
+            
+            return approved, requested
+            
+        except Exception as e:
+            logger.error(f"Error checking private channel status: {e}")
+            return False, False
+    
+    async def approve_private_channel(self, user_id: int):
+        """Одобрение доступа к приватному каналу"""
+        try:
+            # Обновляем статус
+            await self.db.execute('''
+                UPDATE users 
+                SET private_channel_approved = 1,
+                    private_channel_requested = 1
+                WHERE user_id = ?
+            ''', (user_id,))
+            await self.db.commit()
+            
+            # Проверяем что обновилось
+            cursor = await self.db.execute('''
+                SELECT private_channel_approved, private_channel_requested
+                FROM users WHERE user_id = ?
+            ''', (user_id,))
+            result = await cursor.fetchone()
+            
+            logger.info(f"✅ Private channel approved for user {user_id}")
+            logger.info(f"✅ DB values after update: approved={result[0]}, requested={result[1]}")
+            
+            return True
+        except Exception as e:
+            logger.error(f"Error approving private channel: {e}")
+            return False
+    
+    async def request_private_channel(self, user_id: int):
+        """Отметить запрос на приватный канал"""
+        try:
+            await self.db.execute('''
+                UPDATE users 
+                SET private_channel_requested = 1
+                WHERE user_id = ?
+            ''', (user_id,))
+            await self.db.commit()
+            
+            logger.info(f"✅ Private channel requested by user {user_id}")
+            return True
+        except Exception as e:
+            logger.error(f"Error requesting private channel: {e}")
             return False
     
     async def add_mailing(self, user_id: int, targets_count: int, messages_count: int):
@@ -200,36 +278,6 @@ class Database:
         except Exception as e:
             logger.error(f"Error adding support message: {e}")
             return False
-    
-    async def approve_private_channel(self, user_id: int):
-        """Одобрение доступа к приватному каналу"""
-        try:
-            await self.db.execute('''
-                UPDATE users 
-                SET private_channel_approved = 1,
-                    private_channel_requested = 1
-                WHERE user_id = ?
-            ''', (user_id,))
-            await self.db.commit()
-            logger.info(f"✅ Private channel approved for user {user_id}")
-            return True
-        except Exception as e:
-            logger.error(f"Error approving private channel: {e}")
-            return False
-    
-    async def check_private_channel_status(self, user_id: int):
-        """Проверка статуса приватного канала"""
-        cursor = await self.db.execute('''
-            SELECT private_channel_approved, private_channel_requested
-            FROM users WHERE user_id = ?
-        ''', (user_id,))
-        
-        result = await cursor.fetchone()
-        
-        if not result:
-            return False, False
-        
-        return bool(result[0]), bool(result[1])
     
     async def close(self):
         """Закрытие соединения"""
