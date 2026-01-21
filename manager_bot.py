@@ -51,6 +51,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Команда /start с проверкой подписки"""
     user = update.effective_user
     
+    # Сначала регистрируем пользователя
+    await db.register_user(user.id, user.username or user.first_name)
+    
     # Проверка подписки на публичные каналы
     not_subscribed = await check_subscription_channels(user.id, context)
     
@@ -71,29 +74,37 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     # Проверка подписки на приватный канал
-    cursor = await db.db.execute(
-        'SELECT private_channel_approved FROM users WHERE user_id = ?',
-        (user.id,)
-    )
-    result = await cursor.fetchone()
+    approved, requested = await db.check_private_channel_status(user.id)
     
-    if not result or not result[0]:
-        keyboard = [
-            [InlineKeyboardButton("📱 Подписаться на приватный канал", url=PRIVATE_CHANNEL_LINK)],
-            [InlineKeyboardButton("✅ Я подписался (ожидание проверки)", callback_data="request_approval")]
-        ]
-        
-        await update.message.reply_text(
-            f"👋 Привет, {user.first_name}!\n\n"
-            f"Последний шаг - подпишитесь на приватный канал.\n"
-            f"После подписки нажмите кнопку ниже.\n\n"
-            f"Админ проверит подписку и одобрит доступ.",
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
-        return
+    logger.info(f"User {user.id} private channel status: approved={approved}, requested={requested}")
     
-    # Регистрация и показ главного меню
-    await db.register_user(user.id, user.username or user.first_name)
+    if not approved:
+        if requested:
+            # Уже запросил, ждёт одобрения
+            await update.message.reply_text(
+                "⏳ Ваш запрос на доступ к приватному каналу\n"
+                "находится на рассмотрении.\n\n"
+                "Вы получите уведомление после проверки администратором.\n\n"
+                "Обычно это занимает до 24 часов."
+            )
+            return
+        else:
+            # Первый раз - показываем кнопку подписки
+            keyboard = [
+                [InlineKeyboardButton("📱 Подписаться на приватный канал", url=PRIVATE_CHANNEL_LINK)],
+                [InlineKeyboardButton("✅ Я подписался (ожидание проверки)", callback_data="request_approval")]
+            ]
+            
+            await update.message.reply_text(
+                f"👋 Привет, {user.first_name}!\n\n"
+                f"Последний шаг - подпишитесь на приватный канал.\n"
+                f"После подписки нажмите кнопку ниже.\n\n"
+                f"Админ проверит подписку и одобрит доступ.",
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+            return
+    
+    # Всё ОК - показываем главное меню
     sub_type, limits = await db.check_subscription(user.id)
     
     keyboard = [
@@ -113,6 +124,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"📝 Макс. сообщений: {limits['max_messages']}\n"
         f"👥 Макс. получателей: {limits['max_targets']}\n\n"
         f"⚠️ ВНИМАНИЕ! Использование на свой риск!\n"
+        f"• Возможен бан аккаунта\n"
         f"• Не спамьте незнакомым людям\n"
         f"• Соблюдайте лимиты Telegram\n\n"
         f"Выберите действие:"
@@ -162,12 +174,25 @@ async def request_approval(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     user = query.from_user
     
+    # Проверяем не одобрен ли уже
+    approved, requested = await db.check_private_channel_status(user.id)
+    
+    if approved:
+        await query.edit_message_text("✅ Вы уже одобрены! Используйте /start")
+        return
+    
+    if requested:
+        await query.answer("⏳ Запрос уже отправлен!", show_alert=True)
+        return
+    
     # Сохраняем запрос
     await db.db.execute(
         'UPDATE users SET private_channel_requested = 1 WHERE user_id = ?',
         (user.id,)
     )
     await db.db.commit()
+    
+    logger.info(f"User {user.id} requested private channel approval")
     
     # Уведомление админу
     keyboard = [
@@ -191,7 +216,8 @@ async def request_approval(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text(
         "⏳ Запрос отправлен администратору!\n\n"
         "Вы получите уведомление после проверки.\n"
-        "Обычно это занимает до 24 часов."
+        "Обычно это занимает до 24 часов.\n\n"
+        "Я сообщу вам когда доступ будет одобрен!"
     )
 
 
@@ -201,32 +227,36 @@ async def approve_private_channel(update: Update, context: ContextTypes.DEFAULT_
     await query.answer()
     
     if query.from_user.id != ADMIN_ID:
+        await query.answer("❌ Нет доступа", show_alert=True)
         return
     
     user_id = int(query.data.split("_")[2])
     
+    logger.info(f"Admin approving private channel for user {user_id}")
+    
     # Используем функцию из database.py
     success = await db.approve_private_channel(user_id)
     
-    if not success:
-        await query.answer("❌ Ошибка одобрения", show_alert=True)
-        return
-    
-    # Уведомление пользователю
-    try:
-        await context.bot.send_message(
-            user_id,
-            "✅ Доступ к приватному каналу одобрен!\n\n"
-            "Теперь вы можете использовать бота.\n"
-            "Отправьте /start"
+    if success:
+        # Уведомление пользователю
+        try:
+            await context.bot.send_message(
+                user_id,
+                "✅ Доступ к приватному каналу одобрен!\n\n"
+                "Теперь вы можете использовать бота.\n\n"
+                "Отправьте /start для начала работы! 🎉"
+            )
+            logger.info(f"User {user_id} notified about approval")
+        except Exception as e:
+            logger.error(f"Failed to notify user {user_id}: {e}")
+        
+        await query.edit_message_text(
+            f"{query.message.text}\n\n"
+            f"✅ ОДОБРЕНО ✅\n"
+            f"Пользователь уведомлён!"
         )
-    except:
-        pass
-    
-    await query.edit_message_text(
-        f"{query.message.text}\n\n"
-        f"✅ ОДОБРЕНО"
-    )
+    else:
+        await query.answer("❌ Ошибка одобрения", show_alert=True)
 
 
 async def reject_private_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
