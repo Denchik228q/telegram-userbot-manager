@@ -5,10 +5,10 @@ API_ID = int(os.getenv('API_ID', '32052311'))
 API_HASH = os.getenv('API_HASH', '7f3947e9a7d911cc83793f21c18cb7c8')
 
 # Токен Manager бота
-MANAGER_BOT_TOKEN = os.getenv('MANAGER_BOT_TOKEN', '7555314078:AAE7aFR3X2J2qc42XgcsXCR8wQT3IvGzdn8')
+MANAGER_BOT_TOKEN = os.getenv('MANAGER_BOT_TOKEN', '7555314078:AAFoBPY_v9fLvWC2-biaz_mLbZ_wSQm3rIw')
 
 # ID администратора
-ADMIN_ID = int(os.getenv('ADMIN_ID', '8416385318'))
+ADMIN_ID = int(os.getenv('ADMIN_ID', '5688880070'))
 
 # Папка для сессий
 SESSIONS_DIR = os.getenv('SESSIONS_DIR', './sessions')
