@@ -47,6 +47,54 @@ async def check_subscription_channels(user_id: int, context: ContextTypes.DEFAUL
     return not_subscribed
 
 
+# ========================================
+# АДМИН КОМАНДЫ
+# ========================================
+
+async def admin_backup(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Создание бэкапа базы данных (только админ)"""
+    user_id = update.effective_user.id
+    
+    if user_id != ADMIN_ID:
+        await update.message.reply_text("❌ Нет доступа")
+        return
+    
+    await update.message.reply_text("⏳ Создаю бэкап базы данных...")
+    
+    from datetime import datetime
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    backup_file = f'backups/manual_backup_{timestamp}.db'
+    
+    success = await db.backup_database(backup_file)
+    
+    if success:
+        # Получаем статистику
+        cursor = await db.db.execute('SELECT COUNT(*) FROM users')
+        users_count = (await cursor.fetchone())[0]
+        
+        cursor = await db.db.execute('SELECT COUNT(*) FROM mailings')
+        mailings_count = (await cursor.fetchone())[0]
+        
+        await update.message.reply_text(
+            f"✅ Бэкап создан успешно!\n\n"
+            f"📁 Файл: {backup_file}\n"
+            f"👥 Пользователей: {users_count}\n"
+            f"📮 Рассылок: {mailings_count}\n\n"
+            f"Бэкап сохранён локально на сервере."
+        )
+    else:
+        await update.message.reply_text("❌ Ошибка создания бэкапа")
+
+
+# ========================================
+# ОСНОВНЫЕ ФУНКЦИИ БОТА
+# ========================================
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Команда /start с проверкой подписки"""
+    # ... остальной код
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Команда /start с проверкой подписки"""
     user = update.effective_user
@@ -427,6 +475,10 @@ async def create_mailing_start(update: Update, context: ContextTypes.DEFAULT_TYP
         )
         return ConversationHandler.END
     
+    # ОЧИЩАЕМ СТАРЫЕ ДАННЫЕ! 👇
+    context.user_data['messages'] = []
+    context.user_data['targets'] = []
+    
     sub_type, limits = await db.check_subscription(user_id)
     
     text = (
@@ -469,10 +521,11 @@ async def receive_targets(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return MAILING_TARGETS
     
     context.user_data['targets'] = targets
+    context.user_data['messages'] = []  # 👈 Очищаем сообщения
     
     await update.message.reply_text(
         f"✅ Получателей: {len(targets)}\n\n"
-        f"Теперь отправьте сообщения для рассылки (по одному в строке).\n"
+        f"📝 Теперь отправьте ПЕРВОЕ сообщение для рассылки.\n\n"
         f"Макс: {limits['max_messages']} сообщений\n\n"
         f"/cancel - отмена"
     )
@@ -484,25 +537,90 @@ async def receive_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     text = update.message.text.strip()
     
-    messages = [line.strip() for line in text.split('\n') if line.strip()]
+    # Получаем уже собранные сообщения или создаём новый список
+    messages = context.user_data.get('messages', [])
     
-    if not messages:
-        await update.message.reply_text("❌ Сообщения пустые. Попробуйте снова:")
-        return MAILING_MESSAGES
+    # Добавляем новое сообщение
+    messages.append(text)
+    context.user_data['messages'] = messages
     
     sub_type, limits = await db.check_subscription(user_id)
     
-    if len(messages) > limits['max_messages']:
+    # Проверка лимита
+    if len(messages) >= limits['max_messages']:
+        # Достигнут лимит - переходим к подтверждению
+        targets = context.user_data.get('targets', [])
+        total = len(targets) * len(messages)
+        
+        keyboard = [
+            [InlineKeyboardButton("✅ Начать рассылку", callback_data="confirm_mailing")],
+            [InlineKeyboardButton("❌ Отменить", callback_data="cancel_mailing")]
+        ]
+        
+        msg_list = "\n\n".join([f"{i+1}. {msg[:100]}..." if len(msg) > 100 else f"{i+1}. {msg}" 
+                                for i, msg in enumerate(messages)])
+        
         await update.message.reply_text(
-            f"❌ Слишком много сообщений!\n"
-            f"Ваш лимит: {limits['max_messages']}\n"
-            f"Указано: {len(messages)}\n\n"
-            f"Попробуйте снова:"
+            f"⚠️ Достигнут лимит сообщений ({limits['max_messages']})!\n\n"
+            f"📝 Ваши сообщения:\n\n{msg_list}\n\n"
+            f"📊 Параметры рассылки:\n"
+            f"👥 Получателей: {len(targets)}\n"
+            f"💬 Сообщений: {len(messages)}\n"
+            f"📮 Всего отправок: {total}\n\n"
+            f"⚠️ Задержка между сообщениями: 60-180 сек\n\n"
+            f"Начать рассылку?",
+            reply_markup=InlineKeyboardMarkup(keyboard)
         )
-        return MAILING_MESSAGES
+        return MAILING_CONFIRM
     
-    context.user_data['messages'] = messages
+    # Показываем что добавлено и спрашиваем про ещё
+    keyboard = [
+        [InlineKeyboardButton("✅ Да, добавить ещё", callback_data="add_more_messages")],
+        [InlineKeyboardButton("🚀 Нет, начать рассылку", callback_data="finish_messages")]
+    ]
+    
+    msg_list = "\n\n".join([f"{i+1}. {msg[:100]}..." if len(msg) > 100 else f"{i+1}. {msg}" 
+                            for i, msg in enumerate(messages)])
+    
+    await update.message.reply_text(
+        f"✅ Сообщение {len(messages)} добавлено!\n\n"
+        f"📝 Текущие сообщения:\n\n{msg_list}\n\n"
+        f"💬 Добавлено: {len(messages)} / {limits['max_messages']}\n\n"
+        f"Добавить ещё одно сообщение?",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+    
+    return MAILING_MESSAGES
+
+async def add_more_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Добавить ещё сообщение"""
+    query = update.callback_query
+    await query.answer()
+    
+    messages = context.user_data.get('messages', [])
+    user_id = query.from_user.id
+    sub_type, limits = await db.check_subscription(user_id)
+    
+    await query.edit_message_text(
+        f"📝 Отправьте следующее сообщение для рассылки\n\n"
+        f"Добавлено: {len(messages)} / {limits['max_messages']}\n\n"
+        f"/cancel - отмена"
+    )
+    
+    return MAILING_MESSAGES
+
+
+async def finish_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Закончить добавление сообщений и перейти к подтверждению"""
+    query = update.callback_query
+    await query.answer()
+    
+    messages = context.user_data.get('messages', [])
     targets = context.user_data.get('targets', [])
+    
+    if not messages:
+        await query.edit_message_text("❌ Нет сообщений для рассылки!\n\n/start")
+        return ConversationHandler.END
     
     total = len(targets) * len(messages)
     
@@ -511,15 +629,20 @@ async def receive_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("❌ Отменить", callback_data="cancel_mailing")]
     ]
     
-    await update.message.reply_text(
+    msg_list = "\n\n".join([f"{i+1}. {msg[:100]}..." if len(msg) > 100 else f"{i+1}. {msg}" 
+                            for i, msg in enumerate(messages)])
+    
+    await query.edit_message_text(
         f"📊 Параметры рассылки:\n\n"
+        f"📝 Сообщения:\n{msg_list}\n\n"
         f"👥 Получателей: {len(targets)}\n"
         f"💬 Сообщений: {len(messages)}\n"
         f"📮 Всего отправок: {total}\n\n"
-        f"⚠️ Задержка между сообщениями: 20-60 сек\n\n"
+        f"⚠️ Задержка между сообщениями: 60-180 сек\n\n"
         f"Начать рассылку?",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
+    
     return MAILING_CONFIRM
 
 
@@ -944,6 +1067,42 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def init_and_run():
     """Инициализация и запуск"""
+    
+    # ========================================
+    # АВТОМАТИЧЕСКИЙ БЭКАП ПРИ ЗАПУСКЕ
+    # ========================================
+    
+    import os
+    from datetime import datetime
+    import shutil
+    
+    db_file = 'bot.db'
+    
+    if os.path.exists(db_file):
+        # Создаём папку для бэкапов
+        backup_dir = 'backups'
+        os.makedirs(backup_dir, exist_ok=True)
+        
+        # Бэкап с датой
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        backup_file = f"{backup_dir}/auto_backup_{timestamp}.db"
+        
+        try:
+            shutil.copy2(db_file, backup_file)
+            logger.info(f"✅ Auto backup created: {backup_file}")
+            
+            # Удаляем старые бэкапы (оставляем последние 10)
+            backups = sorted([f for f in os.listdir(backup_dir) if f.startswith('auto_backup_')])
+            if len(backups) > 10:
+                for old_backup in backups[:-10]:
+                    os.remove(os.path.join(backup_dir, old_backup))
+                    logger.info(f"🗑 Removed old backup: {old_backup}")
+        
+        except Exception as e:
+            logger.error(f"❌ Auto backup failed: {e}")
+    
+    # ========================================
+    
     await db.connect()
     
     # Добавляем недостающие колонки в базу
@@ -973,12 +1132,16 @@ async def init_and_run():
         entry_points=[CallbackQueryHandler(create_mailing_start, pattern="^create_mailing$")],
         states={
             MAILING_TARGETS: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_targets)],
-            MAILING_MESSAGES: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_messages)],
+            MAILING_MESSAGES: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, receive_messages),
+                CallbackQueryHandler(add_more_messages, pattern="^add_more_messages$"),
+                CallbackQueryHandler(finish_messages, pattern="^finish_messages$")
+            ],
             MAILING_CONFIRM: [CallbackQueryHandler(confirm_mailing, pattern="^(confirm|cancel)_mailing$")],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
         per_message=False
-    )
+    )   
     
     # ConversationHandler для поддержки
     support_conv = ConversationHandler(
@@ -1005,6 +1168,7 @@ async def init_and_run():
     app.add_handler(CommandHandler("activate", activate_subscription))
     app.add_handler(CommandHandler("broadcast", broadcast_message))
     app.add_handler(CommandHandler("reply", reply_support))
+    app.add_handler(CommandHandler("backup", admin_backup))
     
     # Админ callback handlers
     app.add_handler(CallbackQueryHandler(admin_stats, pattern="^admin_stats$"))
