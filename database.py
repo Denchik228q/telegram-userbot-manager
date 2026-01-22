@@ -19,65 +19,98 @@ class Database:
         logger.info(f"✅ Database connected: {self.db_name}")
     
     async def create_tables(self):
-        """Создание таблиц"""
-        # Создаём таблицу пользователей
+    """Создание таблиц с сохранением данных"""
+    
+    # ========================================
+    # ТАБЛИЦА USERS - НЕ УДАЛЯЕМ, ТОЛЬКО ДОБАВЛЯЕМ КОЛОНКИ!
+    # ========================================
+    
+    # Проверяем существует ли таблица
+    cursor = await self.db.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='users'"
+    )
+    table_exists = await cursor.fetchone()
+    
+    if not table_exists:
+        # Таблица не существует - создаём с нуля
         await self.db.execute('''
-            CREATE TABLE IF NOT EXISTS users (
+            CREATE TABLE users (
                 user_id INTEGER PRIMARY KEY,
                 username TEXT,
                 phone TEXT,
                 subscription_type TEXT DEFAULT 'trial',
                 subscription_expires TEXT,
-                is_active BOOLEAN DEFAULT 1,
+                is_active INTEGER DEFAULT 1,
                 private_channel_approved INTEGER DEFAULT 0,
                 private_channel_requested INTEGER DEFAULT 0,
                 registered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
-        
-        # Проверяем наличие колонок и добавляем при необходимости
-        cursor = await self.db.execute("PRAGMA table_info(users)")
-        columns = await cursor.fetchall()
-        column_names = [col[1] for col in columns]
-        
-        if 'private_channel_approved' not in column_names:
-            await self.db.execute('ALTER TABLE users ADD COLUMN private_channel_approved INTEGER DEFAULT 0')
-            logger.info("✅ Added column: private_channel_approved")
-        
-        if 'private_channel_requested' not in column_names:
-            await self.db.execute('ALTER TABLE users ADD COLUMN private_channel_requested INTEGER DEFAULT 0')
-            logger.info("✅ Added column: private_channel_requested")
-        
-        # Создаём таблицу рассылок
-        await self.db.execute('''
-            CREATE TABLE IF NOT EXISTS mailings (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER,
-                targets_count INTEGER,
-                messages_count INTEGER,
-                sent_count INTEGER DEFAULT 0,
-                failed_count INTEGER DEFAULT 0,
-                status TEXT DEFAULT 'pending',
-                started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                finished_at TIMESTAMP,
-                FOREIGN KEY (user_id) REFERENCES users(user_id)
-            )
-        ''')
-        
-        # Создаём таблицу поддержки
-        await self.db.execute('''
-            CREATE TABLE IF NOT EXISTS support_messages (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER,
-                message TEXT,
-                is_answered INTEGER DEFAULT 0,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (user_id) REFERENCES users(user_id)
-            )
-        ''')
-        
-        await self.db.commit()
-        logger.info("✅ Tables created/updated")
+        logger.info("✅ Table 'users' created")
+    else:
+        logger.info("✅ Table 'users' already exists, checking columns...")
+    
+    # Получаем список существующих колонок
+    cursor = await self.db.execute("PRAGMA table_info(users)")
+    columns = await cursor.fetchall()
+    column_names = [col[1] for col in columns]
+    
+    # Добавляем недостающие колонки (если их нет)
+    columns_to_add = {
+        'username': 'TEXT',
+        'phone': 'TEXT',
+        'subscription_type': "TEXT DEFAULT 'trial'",
+        'subscription_expires': 'TEXT',
+        'is_active': 'INTEGER DEFAULT 1',
+        'private_channel_approved': 'INTEGER DEFAULT 0',
+        'private_channel_requested': 'INTEGER DEFAULT 0',
+        'registered_at': 'TIMESTAMP DEFAULT CURRENT_TIMESTAMP'
+    }
+    
+    for col_name, col_type in columns_to_add.items():
+        if col_name not in column_names:
+            try:
+                await self.db.execute(f'ALTER TABLE users ADD COLUMN {col_name} {col_type}')
+                logger.info(f"✅ Added column: {col_name}")
+            except Exception as e:
+                logger.warning(f"⚠️ Column {col_name} already exists or error: {e}")
+    
+    # ========================================
+    # ТАБЛИЦА MAILINGS
+    # ========================================
+    
+    await self.db.execute('''
+        CREATE TABLE IF NOT EXISTS mailings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            targets_count INTEGER,
+            messages_count INTEGER,
+            sent_count INTEGER DEFAULT 0,
+            failed_count INTEGER DEFAULT 0,
+            status TEXT DEFAULT 'pending',
+            started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            finished_at TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users(user_id)
+        )
+    ''')
+    
+    # ========================================
+    # ТАБЛИЦА SUPPORT_MESSAGES
+    # ========================================
+    
+    await self.db.execute('''
+        CREATE TABLE IF NOT EXISTS support_messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            message TEXT,
+            is_answered INTEGER DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users(user_id)
+        )
+    ''')
+    
+    await self.db.commit()
+    logger.info("✅ All tables created/updated successfully")
     
     async def register_user(self, user_id: int, username: str):
         """Регистрация пользователя"""
@@ -284,6 +317,59 @@ class Database:
         if self.db:
             await self.db.close()
             logger.info("✅ Database closed")
+
+    async def backup_database(self, backup_path='bot_backup.db'):
+    """Создание бэкапа базы данных"""
+    try:
+        import shutil
+        shutil.copy2(self.db_name, backup_path)
+        logger.info(f"✅ Database backup created: {backup_path}")
+        return True
+    except Exception as e:
+        logger.error(f"❌ Backup failed: {e}")
+        return False
+
+async def get_all_users(self):
+    """Получить всех пользователей (для миграции)"""
+    try:
+        cursor = await self.db.execute('''
+            SELECT user_id, username, phone, subscription_type, 
+                   subscription_expires, is_active, registered_at
+            FROM users
+        ''')
+        users = await cursor.fetchall()
+        return users
+    except Exception as e:
+        logger.error(f"Error getting users: {e}")
+        return []
+
+async def migrate_user_data(self, old_db_path='bot_backup.db'):
+    """Миграция данных из старой базы"""
+    try:
+        # Подключаемся к старой базе
+        old_db = await aiosqlite.connect(old_db_path)
+        
+        # Получаем пользователей
+        cursor = await old_db.execute('SELECT * FROM users')
+        old_users = await cursor.fetchall()
+        
+        # Переносим в новую базу
+        for user in old_users:
+            await self.db.execute('''
+                INSERT OR REPLACE INTO users 
+                (user_id, username, phone, subscription_type, subscription_expires, is_active, registered_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            ''', user[:7])  # Первые 7 колонок
+        
+        await self.db.commit()
+        await old_db.close()
+        
+        logger.info(f"✅ Migrated {len(old_users)} users from backup")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Migration error: {e}")
+        return False
 
 
 db = Database()
