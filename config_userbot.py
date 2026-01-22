@@ -5,7 +5,7 @@ API_ID = int(os.getenv('API_ID', '32052311'))
 API_HASH = os.getenv('API_HASH', '7f3947e9a7d911cc83793f21c18cb7c8')
 
 # Токен Manager бота
-MANAGER_BOT_TOKEN = os.getenv('MANAGER_BOT_TOKEN', '7555314078:AAFoBPY_v9fLvWC2-biaz_mLbZ_wSQm3rIw')
+MANAGER_BOT_TOKEN = os.getenv('MANAGER_BOT_TOKEN', '8457587045:AAHellpvMkkHeJLVzYMCjKrE6smt9ekBja0')
 
 # ID администратора
 ADMIN_ID = int(os.getenv('ADMIN_ID', '5688880070'))
