@@ -319,7 +319,7 @@ class Database:
             logger.info("✅ Database closed")
 
     async def backup_database(self, backup_path='bot_backup.db'):
-    """Создание бэкапа базы данных"""
+        """Создание бэкапа базы данных"""
     try:
         import shutil
         shutil.copy2(self.db_name, backup_path)
