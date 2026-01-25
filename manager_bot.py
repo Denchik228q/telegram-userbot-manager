@@ -47,7 +47,7 @@ logger = logging.getLogger(__name__)
 
 # Инициализация базы данных и юзербота
 db = Database()
-userbot_manager = UserbotManager(API_ID, API_HASH)
+userbot_manager = UserbotManager()
 
 # ============= СОСТОЯНИЯ ДЛЯ CONVERSATION HANDLERS =============
 # Подключение юзербота
