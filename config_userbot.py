@@ -1,79 +1,87 @@
-﻿import os
+﻿#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 
-# API данные Telegram
-API_ID = int(os.getenv('API_ID', '32052311'))
-API_HASH = os.getenv('API_HASH', '7f3947e9a7d911cc83793f21c18cb7c8')
+"""
+Конфигурация для Telegram Userbot Manager
+"""
 
-# Токен Manager бота
+import os
+from datetime import timedelta
+
+# ============= TELEGRAM API =============
+API_ID = int(os.getenv('API_ID', '28890915'))
+API_HASH = os.getenv('API_HASH', '4984bb66f393bb411bd33674db81256e')
+
+# ============= БОТЫ =============
 MANAGER_BOT_TOKEN = os.getenv('MANAGER_BOT_TOKEN', '8457587045:AAHellpvMkkHeJLVzYMCjKrE6smt9ekBja0')
 
-# ID администратора
+# ============= АДМИНИСТРАТОР =============
 ADMIN_ID = int(os.getenv('ADMIN_ID', '5688880070'))
 
-# Папка для сессий
-SESSIONS_DIR = os.getenv('SESSIONS_DIR', './sessions')
+# ============= КАНАЛЫ ДЛЯ ПОДПИСКИ =============
 
-# Создать папку если не существует
-if not os.path.exists(SESSIONS_DIR):
-    os.makedirs(SESSIONS_DIR)
-    print(f"📁 Sessions directory created: {SESSIONS_DIR}")
+# Публичные каналы (формат: @username или https://t.me/username)
+CHANNEL_1_URL = os.getenv('CHANNEL_1_URL', '@your_channel_1')
+CHANNEL_2_URL = os.getenv('CHANNEL_2_URL', '@your_channel_2')
+CHANNEL_3_URL = os.getenv('CHANNEL_3_URL', '@your_channel_3')
 
-# Обязательные каналы для подписки
-REQUIRED_CHANNELS = [
-    "@starbombnews",
-]
+# Приватный канал (после оплаты)
+PRIVATE_CHANNEL_URL = os.getenv('PRIVATE_CHANNEL_URL', '@your_private_channel')
 
-# Ссылка на приватный канал
-PRIVATE_CHANNEL_LINK = "https://t.me/+WpVwOyNErI8xZmNi"
+# Названия каналов для кнопок
+CHANNEL_1_NAME = "📢 Основной канал"
+CHANNEL_2_NAME = "💎 VIP канал"
+CHANNEL_3_NAME = "🔔 Новости"
+PRIVATE_CHANNEL_NAME = "🔒 Приватный канал"
 
-# Тарифы подписок
+# ============= ТАРИФНЫЕ ПЛАНЫ =============
+
 SUBSCRIPTIONS = {
-    'trial': {
-        'name': '🆓 Пробная',
-        'price': 0,
-        'duration_days': 3,
-        'daily_limit': 25,
-        'max_messages': 3,
-        'max_targets': 10,
-        'description': 'Для тестирования бота'
-    },
     'basic': {
-        'name': '⭐ Базовая',
+        'name': 'Basic Plan',
+        'price': 299,
+        'duration': 30,  # дней
+        'description': '• Подключение 1 юзербота\n• Доступ к приватному каналу\n• Базовая поддержка'
+    },
+    'standard': {
+        'name': 'Standard Plan',
         'price': 499,
-        'duration_days': 30,
-        'daily_limit': 150,
-        'max_messages': 5,
-        'max_targets': 50,
-        'description': 'Для небольших рассылок'
+        'duration': 30,
+        'description': '• Подключение до 3 юзерботов\n• Приоритетная поддержка\n• Все функции Basic'
     },
-    'pro': {
-        'name': '💎 Продвинутая',
-        'price': 1499,
-        'duration_days': 30,
-        'daily_limit': 1000,
-        'max_messages': 10,
-        'max_targets': 200,
-        'description': 'Для активного использования'
+    'vip': {
+        'name': 'VIP Plan',
+        'price': 999,
+        'duration': 30,
+        'description': '• Безлимит юзерботов\n• VIP поддержка 24/7\n• Эксклюзивные функции'
     },
-    'premium': {
-        'name': '👑 Премиум',
-        'price': 4999,
-        'duration_days': 30,
-        'daily_limit': 100000,
-        'max_messages': 50,
-        'max_targets': 10000,
-        'description': 'Безлимитная рассылка'
+    'trial': {
+        'name': 'Trial',
+        'price': 0,
+        'duration': 3,
+        'description': '• Пробный период 3 дня\n• Ограниченный функционал'
     }
 }
 
-# Реквизиты для оплаты
-PAYMENT_DETAILS = """
-💳 Реквизиты для оплаты:
+# ============= БАЗА ДАННЫХ =============
+DATABASE_PATH = os.getenv('DATABASE_PATH', 'bot.db')
 
-• По карте: 2200 1536 8370 4721
-• ЮMoney: 4100118589897796
-• USDT (TRC20): TD5EJBjQ3zM2SpgLCaBf4XptT7CoAFWPQr
-За реквизитами более удобными вам, обратитесь в поддержку: /support
+# ============= НАСТРОЙКИ РАССЫЛКИ =============
+MAILING_DELAY = float(os.getenv('MAILING_DELAY', '0.2'))  # секунд между сообщениями
 
-После оплаты отправьте чек поддержке
-"""
+# ============= ЛОГИРОВАНИЕ =============
+LOG_LEVEL = os.getenv('LOG_LEVEL', 'INFO')
+
+# ============= НАСТРОЙКИ СЕССИЙ =============
+SESSIONS_DIR = os.getenv('SESSIONS_DIR', './sessions')
+
+# ============= БЭКАПЫ =============
+BACKUP_DIR = os.getenv('BACKUP_DIR', './backups')
+AUTO_BACKUP = os.getenv('AUTO_BACKUP', 'True').lower() == 'true'
+BACKUP_INTERVAL_HOURS = int(os.getenv('BACKUP_INTERVAL_HOURS', '24'))
+
+# ============= ПРОВЕРКА ПОДПИСОК =============
+CHECK_SUBSCRIPTION_ON_START = os.getenv('CHECK_SUBSCRIPTION_ON_START', 'True').lower() == 'true'
+
+# ============= ПРОЧЕЕ =============
+TRIAL_DAYS = int(os.getenv('TRIAL_DAYS', '3'))
