@@ -1,344 +1,439 @@
-﻿import aiosqlite
+﻿#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+"""
+База данных для Telegram Manager Bot
+"""
+
+import sqlite3
 import logging
+import os
 from datetime import datetime, timedelta
-from config_userbot import SUBSCRIPTIONS
+from typing import Optional, List, Dict
 
 logger = logging.getLogger(__name__)
 
 
 class Database:
-    def __init__(self, db_name='bot.db'):
-        self.db_name = db_name
-        self.db = None
+    """Класс для работы с базой данных SQLite"""
     
-    async def connect(self):
+    def __init__(self, db_path: str = 'bot.db'):
+        """Инициализация базы данных"""
+        self.db_path = db_path
+        self.conn = None
+        self.cursor = None
+        self.connect()
+        self.create_tables()
+    
+    def connect(self):
         """Подключение к базе данных"""
-        self.db = await aiosqlite.connect(self.db_name)
-        self.db.row_factory = aiosqlite.Row
-        await self.create_tables()
-        logger.info(f"✅ Database connected: {self.db_name}")
+        try:
+            self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
+            self.conn.row_factory = sqlite3.Row
+            self.cursor = self.conn.cursor()
+            logger.info(f"✅ Database connected: {self.db_path}")
+        except Exception as e:
+            logger.error(f"❌ Database connection error: {e}")
+            raise
     
-    async def create_tables(self):
-        """Создание таблиц с сохранением данных"""
-        
-        # Проверяем существует ли таблица
-        cursor = await self.db.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='users'"
-        )
-        table_exists = await cursor.fetchone()
-        
-        if not table_exists:
-            # Таблица не существует - создаём с нуля
-            await self.db.execute('''
-                CREATE TABLE users (
-                    user_id INTEGER PRIMARY KEY,
+    def create_tables(self):
+        """Создание таблиц"""
+        try:
+            # Таблица пользователей
+            self.cursor.execute("""
+                CREATE TABLE IF NOT EXISTS users (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    telegram_id INTEGER UNIQUE NOT NULL,
                     username TEXT,
-                    phone TEXT,
-                    subscription_type TEXT DEFAULT 'trial',
-                    subscription_expires TEXT,
-                    is_active INTEGER DEFAULT 1,
-                    private_channel_approved INTEGER DEFAULT 0,
-                    private_channel_requested INTEGER DEFAULT 0,
-                    registered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    first_name TEXT,
+                    phone_number TEXT,
+                    session_id TEXT,
+                    subscription_plan TEXT DEFAULT 'Trial',
+                    subscription_end TIMESTAMP,
+                    is_banned BOOLEAN DEFAULT 0,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
-            ''')
+            """)
             logger.info("✅ Table 'users' created")
-        else:
-            logger.info("✅ Table 'users' already exists, checking columns...")
-        
-        # Получаем список существующих колонок
-        cursor = await self.db.execute("PRAGMA table_info(users)")
-        columns = await cursor.fetchall()
-        column_names = [col[1] for col in columns]
-        
-        # Добавляем недостающие колонки (если их нет)
-        columns_to_add = {
-            'username': 'TEXT',
-            'phone': 'TEXT',
-            'subscription_type': "TEXT DEFAULT 'trial'",
-            'subscription_expires': 'TEXT',
-            'is_active': 'INTEGER DEFAULT 1',
-            'private_channel_approved': 'INTEGER DEFAULT 0',
-            'private_channel_requested': 'INTEGER DEFAULT 0',
-            'registered_at': 'TIMESTAMP DEFAULT CURRENT_TIMESTAMP'
-        }
-        
-        for col_name, col_type in columns_to_add.items():
-            if col_name not in column_names:
-                try:
-                    await self.db.execute(f'ALTER TABLE users ADD COLUMN {col_name} {col_type}')
-                    logger.info(f"✅ Added column: {col_name}")
-                except Exception as e:
-                    logger.warning(f"⚠️ Column {col_name} already exists or error: {e}")
-        
-        # Таблица рассылок
-        await self.db.execute('''
-            CREATE TABLE IF NOT EXISTS mailings (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER,
-                targets_count INTEGER,
-                messages_count INTEGER,
-                sent_count INTEGER DEFAULT 0,
-                failed_count INTEGER DEFAULT 0,
-                status TEXT DEFAULT 'pending',
-                started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                finished_at TIMESTAMP,
-                FOREIGN KEY (user_id) REFERENCES users(user_id)
-            )
-        ''')
-        
-        # Таблица поддержки
-        await self.db.execute('''
-            CREATE TABLE IF NOT EXISTS support_messages (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER,
-                message TEXT,
-                is_answered INTEGER DEFAULT 0,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (user_id) REFERENCES users(user_id)
-            )
-        ''')
-        
-        await self.db.commit()
-        logger.info("✅ All tables created/updated successfully")
-    
-    async def register_user(self, user_id: int, username: str):
-        """Регистрация пользователя"""
-        try:
-            await self.db.execute('''
-                INSERT OR IGNORE INTO users (user_id, username) 
-                VALUES (?, ?)
-            ''', (user_id, username))
-            await self.db.commit()
-            logger.info(f"✅ User registered: {user_id}")
-            return True
+            
+            # Таблица платежей
+            self.cursor.execute("""
+                CREATE TABLE IF NOT EXISTS payments (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    amount REAL NOT NULL,
+                    plan TEXT NOT NULL,
+                    status TEXT DEFAULT 'pending',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (user_id) REFERENCES users(telegram_id)
+                )
+            """)
+            logger.info("✅ Table 'payments' created")
+            
+            # Таблица рассылок
+            self.cursor.execute("""
+                CREATE TABLE IF NOT EXISTS mailings (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    message_text TEXT,
+                    sent_count INTEGER DEFAULT 0,
+                    error_count INTEGER DEFAULT 0,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            logger.info("✅ Table 'mailings' created")
+            
+            # Таблица обращений в поддержку
+            self.cursor.execute("""
+                CREATE TABLE IF NOT EXISTS support_tickets (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    message TEXT NOT NULL,
+                    status TEXT DEFAULT 'open',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (user_id) REFERENCES users(telegram_id)
+                )
+            """)
+            logger.info("✅ Table 'support_tickets' created")
+            
+            self.conn.commit()
+            logger.info("✅ All tables created/updated successfully")
+            
         except Exception as e:
-            logger.error(f"Error registering user: {e}")
+            logger.error(f"❌ Error creating tables: {e}")
+            raise
+    
+    # ============= ПОЛЬЗОВАТЕЛИ =============
+    
+    def add_user(self, telegram_id: int, username: str = "", first_name: str = "", 
+                 subscription_plan: str = "Trial", subscription_end: datetime = None):
+        """Добавление нового пользователя"""
+        try:
+            if subscription_end is None:
+                subscription_end = datetime.now() + timedelta(days=3)
+            
+            self.cursor.execute("""
+                INSERT INTO users (telegram_id, username, first_name, subscription_plan, subscription_end)
+                VALUES (?, ?, ?, ?, ?)
+            """, (telegram_id, username, first_name, subscription_plan, subscription_end))
+            
+            self.conn.commit()
+            logger.info(f"✅ User registered: {telegram_id}")
+            return True
+            
+        except sqlite3.IntegrityError:
+            logger.warning(f"⚠️ User {telegram_id} already exists")
+            return False
+        except Exception as e:
+            logger.error(f"❌ Error adding user: {e}")
             return False
     
-    async def update_user_phone(self, user_id: int, phone: str):
-        """Обновление номера телефона"""
+    def get_user(self, telegram_id: int) -> Optional[Dict]:
+        """Получение пользователя по Telegram ID"""
         try:
-            await self.db.execute('''
-                UPDATE users SET phone = ? WHERE user_id = ?
-            ''', (phone, user_id))
-            await self.db.commit()
-            return True
-        except Exception as e:
-            logger.error(f"Error updating phone: {e}")
-            return False
-    
-    async def check_subscription(self, user_id: int):
-        """Проверка подписки"""
-        cursor = await self.db.execute('''
-            SELECT subscription_type, subscription_expires 
-            FROM users WHERE user_id = ?
-        ''', (user_id,))
-        
-        result = await cursor.fetchone()
-        
-        if not result:
-            return 'trial', SUBSCRIPTIONS['trial']
-        
-        sub_type = result[0] or 'trial'
-        expires = result[1]
-        
-        # Проверка срока действия
-        if expires:
-            try:
-                expire_date = datetime.fromisoformat(expires)
-                if datetime.now() > expire_date:
-                    # Подписка истекла
-                    await self.db.execute('''
-                        UPDATE users SET subscription_type = 'trial' 
-                        WHERE user_id = ?
-                    ''', (user_id,))
-                    await self.db.commit()
-                    return 'trial', SUBSCRIPTIONS['trial']
-            except:
-                pass
-        
-        return sub_type, SUBSCRIPTIONS.get(sub_type, SUBSCRIPTIONS['trial'])
-    
-    async def activate_subscription(self, user_id: int, sub_type: str):
-        """Активация подписки"""
-        try:
-            duration = SUBSCRIPTIONS[sub_type]['duration_days']
-            expires = datetime.now() + timedelta(days=duration)
+            self.cursor.execute("""
+                SELECT * FROM users WHERE telegram_id = ?
+            """, (telegram_id,))
             
-            await self.db.execute('''
-                UPDATE users 
-                SET subscription_type = ?, subscription_expires = ?
-                WHERE user_id = ?
-            ''', (sub_type, expires.isoformat(), user_id))
-            await self.db.commit()
+            row = self.cursor.fetchone()
             
-            logger.info(f"✅ Subscription activated: {user_id} -> {sub_type}")
-            return True
-        except Exception as e:
-            logger.error(f"Error activating subscription: {e}")
-            return False
-    
-    async def check_private_channel_status(self, user_id: int):
-        """Проверка статуса приватного канала"""
-        try:
-            cursor = await self.db.execute('''
-                SELECT private_channel_approved, private_channel_requested
-                FROM users WHERE user_id = ?
-            ''', (user_id,))
+            if row:
+                return {
+                    'id': row['id'],
+                    'telegram_id': row['telegram_id'],
+                    'username': row['username'],
+                    'first_name': row['first_name'],
+                    'phone_number': row['phone_number'],
+                    'session_id': row['session_id'],
+                    'subscription_plan': row['subscription_plan'],
+                    'subscription_end': datetime.fromisoformat(row['subscription_end']) if row['subscription_end'] else None,
+                    'is_banned': bool(row['is_banned']),
+                    'created_at': datetime.fromisoformat(row['created_at']),
+                    'updated_at': datetime.fromisoformat(row['updated_at'])
+                }
             
-            result = await cursor.fetchone()
-            
-            if not result:
-                # Пользователь не найден - регистрируем
-                await self.register_user(user_id, str(user_id))
-                return False, False
-            
-            approved = bool(result[0])
-            requested = bool(result[1])
-            
-            logger.info(f"🔍 User {user_id} status from DB: approved={result[0]}, requested={result[1]}")
-            
-            return approved, requested
+            return None
             
         except Exception as e:
-            logger.error(f"Error checking private channel status: {e}")
-            return False, False
-    
-    async def approve_private_channel(self, user_id: int):
-        """Одобрение доступа к приватному каналу"""
-        try:
-            # Обновляем статус
-            await self.db.execute('''
-                UPDATE users 
-                SET private_channel_approved = 1,
-                    private_channel_requested = 1
-                WHERE user_id = ?
-            ''', (user_id,))
-            await self.db.commit()
-            
-            # Проверяем что обновилось
-            cursor = await self.db.execute('''
-                SELECT private_channel_approved, private_channel_requested
-                FROM users WHERE user_id = ?
-            ''', (user_id,))
-            result = await cursor.fetchone()
-            
-            logger.info(f"✅ Private channel approved for user {user_id}")
-            logger.info(f"✅ DB values after update: approved={result[0]}, requested={result[1]}")
-            
-            return True
-        except Exception as e:
-            logger.error(f"Error approving private channel: {e}")
-            return False
-    
-    async def request_private_channel(self, user_id: int):
-        """Отметить запрос на приватный канал"""
-        try:
-            await self.db.execute('''
-                UPDATE users 
-                SET private_channel_requested = 1
-                WHERE user_id = ?
-            ''', (user_id,))
-            await self.db.commit()
-            
-            logger.info(f"✅ Private channel requested by user {user_id}")
-            return True
-        except Exception as e:
-            logger.error(f"Error requesting private channel: {e}")
-            return False
-    
-    async def add_mailing(self, user_id: int, targets_count: int, messages_count: int):
-        """Добавление рассылки"""
-        try:
-            cursor = await self.db.execute('''
-                INSERT INTO mailings (user_id, targets_count, messages_count)
-                VALUES (?, ?, ?)
-            ''', (user_id, targets_count, messages_count))
-            await self.db.commit()
-            return cursor.lastrowid
-        except Exception as e:
-            logger.error(f"Error adding mailing: {e}")
+            logger.error(f"❌ Error getting user: {e}")
             return None
     
-    async def update_mailing(self, mailing_id: int, sent: int, failed: int):
-        """Обновление статуса рассылки"""
+    def get_all_users(self) -> List[Dict]:
+        """Получение всех пользователей"""
         try:
-            await self.db.execute('''
-                UPDATE mailings 
-                SET sent_count = ?, failed_count = ?, 
-                    status = 'completed', finished_at = CURRENT_TIMESTAMP
-                WHERE id = ?
-            ''', (sent, failed, mailing_id))
-            await self.db.commit()
-            return True
-        except Exception as e:
-            logger.error(f"Error updating mailing: {e}")
-            return False
-    
-    async def get_user_stats(self, user_id: int):
-        """Статистика пользователя"""
-        cursor = await self.db.execute('''
-            SELECT 
-                COUNT(*) as mailings_count,
-                SUM(sent_count) as sent_total,
-                SUM(failed_count) as failed_total
-            FROM mailings WHERE user_id = ?
-        ''', (user_id,))
-        
-        result = await cursor.fetchone()
-        return result if result else (0, 0, 0)
-    
-    async def add_support_message(self, user_id: int, message: str):
-        """Добавление обращения в поддержку"""
-        try:
-            await self.db.execute('''
-                INSERT INTO support_messages (user_id, message)
-                VALUES (?, ?)
-            ''', (user_id, message))
-            await self.db.commit()
-            return True
-        except Exception as e:
-            logger.error(f"Error adding support message: {e}")
-            return False
-    
-    async def backup_database(self, backup_path='bot_backup.db'):
-        """Создание бэкапа базы данных"""
-        try:
-            import shutil
-            import os
+            self.cursor.execute("SELECT * FROM users WHERE is_banned = 0")
+            rows = self.cursor.fetchall()
             
-            # Создаём папку если её нет
-            backup_dir = os.path.dirname(backup_path)
-            if backup_dir:
-                os.makedirs(backup_dir, exist_ok=True)
+            users = []
+            for row in rows:
+                users.append({
+                    'id': row['id'],
+                    'telegram_id': row['telegram_id'],
+                    'username': row['username'],
+                    'first_name': row['first_name'],
+                    'phone_number': row['phone_number'],
+                    'session_id': row['session_id'],
+                    'subscription_plan': row['subscription_plan'],
+                    'subscription_end': datetime.fromisoformat(row['subscription_end']) if row['subscription_end'] else None,
+                    'is_banned': bool(row['is_banned']),
+                    'created_at': datetime.fromisoformat(row['created_at']),
+                    'updated_at': datetime.fromisoformat(row['updated_at'])
+                })
             
-            shutil.copy2(self.db_name, backup_path)
-            logger.info(f"✅ Database backup created: {backup_path}")
-            return True
-        except Exception as e:
-            logger.error(f"❌ Backup failed: {e}")
-            return False
-    
-    async def get_all_users(self):
-        """Получить всех пользователей (для миграции)"""
-        try:
-            cursor = await self.db.execute('''
-                SELECT user_id, username, phone, subscription_type, 
-                       subscription_expires, is_active, registered_at
-                FROM users
-            ''')
-            users = await cursor.fetchall()
             return users
+            
         except Exception as e:
-            logger.error(f"Error getting users: {e}")
+            logger.error(f"❌ Error getting all users: {e}")
             return []
     
-    async def close(self):
-        """Закрытие соединения"""
-        if self.db:
-            await self.db.close()
-            logger.info("✅ Database closed")
-
-
-db = Database()
+    def update_user(self, telegram_id: int, **kwargs):
+        """Обновление данных пользователя"""
+        try:
+            # Разрешенные поля для обновления
+            allowed_fields = ['username', 'first_name', 'phone_number', 'session_id', 
+                            'subscription_plan', 'subscription_end', 'is_banned']
+            
+            updates = []
+            values = []
+            
+            for key, value in kwargs.items():
+                if key in allowed_fields:
+                    updates.append(f"{key} = ?")
+                    values.append(value)
+            
+            if not updates:
+                logger.warning("⚠️ No valid fields to update")
+                return False
+            
+            # Добавляем updated_at
+            updates.append("updated_at = ?")
+            values.append(datetime.now())
+            
+            # Добавляем telegram_id в конец для WHERE
+            values.append(telegram_id)
+            
+            query = f"UPDATE users SET {', '.join(updates)} WHERE telegram_id = ?"
+            
+            self.cursor.execute(query, values)
+            self.conn.commit()
+            
+            logger.info(f"✅ User {telegram_id} updated")
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ Error updating user: {e}")
+            return False
+    
+    def ban_user(self, telegram_id: int):
+        """Блокировка пользователя"""
+        return self.update_user(telegram_id, is_banned=1)
+    
+    def unban_user(self, telegram_id: int):
+        """Разблокировка пользователя"""
+        return self.update_user(telegram_id, is_banned=0)
+    
+    # ============= ПЛАТЕЖИ =============
+    
+    def add_payment(self, user_id: int, amount: float, plan: str, status: str = 'pending'):
+        """Добавление платежа"""
+        try:
+            self.cursor.execute("""
+                INSERT INTO payments (user_id, amount, plan, status)
+                VALUES (?, ?, ?, ?)
+            """, (user_id, amount, plan, status))
+            
+            self.conn.commit()
+            logger.info(f"✅ Payment added for user {user_id}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ Error adding payment: {e}")
+            return False
+    
+    def get_payments(self, user_id: int = None) -> List[Dict]:
+        """Получение платежей"""
+        try:
+            if user_id:
+                self.cursor.execute("""
+                    SELECT * FROM payments WHERE user_id = ? ORDER BY created_at DESC
+                """, (user_id,))
+            else:
+                self.cursor.execute("""
+                    SELECT * FROM payments ORDER BY created_at DESC
+                """)
+            
+            rows = self.cursor.fetchall()
+            
+            payments = []
+            for row in rows:
+                payments.append({
+                    'id': row['id'],
+                    'user_id': row['user_id'],
+                    'amount': row['amount'],
+                    'plan': row['plan'],
+                    'status': row['status'],
+                    'created_at': datetime.fromisoformat(row['created_at'])
+                })
+            
+            return payments
+            
+        except Exception as e:
+            logger.error(f"❌ Error getting payments: {e}")
+            return []
+    
+    def update_payment_status(self, payment_id: int, status: str):
+        """Обновление статуса платежа"""
+        try:
+            self.cursor.execute("""
+                UPDATE payments SET status = ? WHERE id = ?
+            """, (status, payment_id))
+            
+            self.conn.commit()
+            logger.info(f"✅ Payment {payment_id} status updated to {status}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ Error updating payment status: {e}")
+            return False
+    
+    # ============= РАССЫЛКИ =============
+    
+    def add_mailing(self, message_text: str, sent_count: int = 0, error_count: int = 0):
+        """Добавление рассылки"""
+        try:
+            self.cursor.execute("""
+                INSERT INTO mailings (message_text, sent_count, error_count)
+                VALUES (?, ?, ?)
+            """, (message_text, sent_count, error_count))
+            
+            self.conn.commit()
+            logger.info("✅ Mailing added")
+            return self.cursor.lastrowid
+            
+        except Exception as e:
+            logger.error(f"❌ Error adding mailing: {e}")
+            return None
+    
+    # ============= ПОДДЕРЖКА =============
+    
+    def add_support_ticket(self, user_id: int, message: str):
+        """Добавление обращения в поддержку"""
+        try:
+            self.cursor.execute("""
+                INSERT INTO support_tickets (user_id, message)
+                VALUES (?, ?)
+            """, (user_id, message))
+            
+            self.conn.commit()
+            logger.info(f"✅ Support ticket created for user {user_id}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ Error creating support ticket: {e}")
+            return False
+    
+    def get_support_tickets(self, status: str = None) -> List[Dict]:
+        """Получение обращений в поддержку"""
+        try:
+            if status:
+                self.cursor.execute("""
+                    SELECT * FROM support_tickets WHERE status = ? ORDER BY created_at DESC
+                """, (status,))
+            else:
+                self.cursor.execute("""
+                    SELECT * FROM support_tickets ORDER BY created_at DESC
+                """)
+            
+            rows = self.cursor.fetchall()
+            
+            tickets = []
+            for row in rows:
+                tickets.append({
+                    'id': row['id'],
+                    'user_id': row['user_id'],
+                    'message': row['message'],
+                    'status': row['status'],
+                    'created_at': datetime.fromisoformat(row['created_at'])
+                })
+            
+            return tickets
+            
+        except Exception as e:
+            logger.error(f"❌ Error getting support tickets: {e}")
+            return []
+    
+    # ============= СТАТИСТИКА =============
+    
+    def get_stats(self) -> Dict:
+        """Получение статистики"""
+        try:
+            stats = {}
+            
+            # Всего пользователей
+            self.cursor.execute("SELECT COUNT(*) as count FROM users WHERE is_banned = 0")
+            stats['total_users'] = self.cursor.fetchone()['count']
+            
+            # Активные подписки
+            self.cursor.execute("""
+                SELECT COUNT(*) as count FROM users 
+                WHERE subscription_end > ? AND subscription_plan != 'Trial' AND is_banned = 0
+            """, (datetime.now(),))
+            stats['active_subscriptions'] = self.cursor.fetchone()['count']
+            
+            # Новые пользователи за сегодня
+            today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+            self.cursor.execute("""
+                SELECT COUNT(*) as count FROM users WHERE created_at >= ?
+            """, (today,))
+            stats['new_today'] = self.cursor.fetchone()['count']
+            
+            # Новые за неделю
+            week_ago = datetime.now() - timedelta(days=7)
+            self.cursor.execute("""
+                SELECT COUNT(*) as count FROM users WHERE created_at >= ?
+            """, (week_ago,))
+            stats['new_week'] = self.cursor.fetchone()['count']
+            
+            # По тарифам
+            for plan in ['Trial', 'basic', 'standard', 'vip']:
+                self.cursor.execute("""
+                    SELECT COUNT(*) as count FROM users 
+                    WHERE subscription_plan = ? AND is_banned = 0
+                """, (plan,))
+                stats[f'{plan.lower()}_users'] = self.cursor.fetchone()['count']
+            
+            return stats
+            
+        except Exception as e:
+            logger.error(f"❌ Error getting stats: {e}")
+            return {}
+    
+    # ============= БЭКАП =============
+    
+    def backup_database(self) -> str:
+        """Создание бэкапа базы данных"""
+        try:
+            # Создаём директорию для бэкапов
+            backup_dir = 'backups'
+            os.makedirs(backup_dir, exist_ok=True)
+            
+            # Имя файла бэкапа
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            backup_path = os.path.join(backup_dir, f'backup_{timestamp}.db')
+            
+            # Копируем базу данных
+            import shutil
+            shutil.copy2(self.db_path, backup_path)
+            
+            logger.info(f"✅ Database backup created: {backup_path}")
+            return backup_path
+            
+        except Exception as e:
+            logger.error(f"❌ Error creating backup: {e}")
+            raise
+    
+    def close(self):
+        """Закрытие соединения с БД"""
+        if self.conn:
+            self.conn.close()
+            logger.info("✅ Database connection closed")
