@@ -100,7 +100,7 @@ class UserbotManager:
             return {'success': True, 'client': client}
         except Exception as e:
             logger.error(f"❌ Error: {e}")
-             return {'success': False, 'error': str(e)}
+            return {'success': False, 'error': str(e)}
     
     async def send_message(self, session_id: str, phone: str, target: str, message: str):
         """Отправка сообщения"""
@@ -175,7 +175,7 @@ class UserbotManager:
                 client = self.sessions[session_id]
                 await client.disconnect()
                 del self.sessions[session_id]
-                logger.info(f"✅ Session disconnected")
+                logger.info("✅ Session disconnected")
                 return True
             return False
         except Exception as e:
