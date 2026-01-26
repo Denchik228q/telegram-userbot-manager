@@ -19,24 +19,20 @@ MANAGER_BOT_TOKEN = os.getenv('MANAGER_BOT_TOKEN', '8457587045:AAHellpvMkkHeJLVz
 ADMIN_ID = int(os.getenv('ADMIN_ID', '5688880070'))
 
 # ============= КАНАЛЫ =============
-
-# Публичный канал (для всех)
 PUBLIC_CHANNEL_URL = os.getenv('PUBLIC_CHANNEL_URL', '@your_public_channel')
 PUBLIC_CHANNEL_NAME = "📢 Публичный канал"
 
-# Приватный канал (после оплаты, через админа)
 PRIVATE_CHANNEL_URL = os.getenv('PRIVATE_CHANNEL_URL', '@your_private_channel')
 PRIVATE_CHANNEL_NAME = "🔒 Приватный канал"
 
 # ============= ТАРИФНЫЕ ПЛАНЫ =============
-
 SUBSCRIPTIONS = {
     'amateur': {
         'name': '🎯 Любительская',
         'price': 499,
-        'duration': 30,  # дней
-        'messages_limit': 1000,  # сообщений в день
-        'accounts_limit': 10,    # аккаунтов
+        'duration': 30,
+        'messages_limit': 1000,
+        'accounts_limit': 10,
         'description': (
             '• 10 аккаунтов\n'
             '• До 1000 сообщений/день\n'
@@ -62,7 +58,7 @@ SUBSCRIPTIONS = {
         'name': '👑 Премиум',
         'price': 4999,
         'duration': 30,
-        'messages_limit': 99999,  # практически безлимит
+        'messages_limit': 99999,
         'accounts_limit': 999,
         'description': (
             '• Безлимит аккаунтов\n'
@@ -84,14 +80,14 @@ SUBSCRIPTIONS = {
 }
 
 # ============= РЕКВИЗИТЫ ДЛЯ ОПЛАТЫ =============
-PAYMENT_CARD = os.getenv('PAYMENT_CARD', '2200 1536 8370 4721')
-PAYMENT_PHONE = os.getenv('PAYMENT_PHONE', '+7 982-757-23-16')
+PAYMENT_CARD = os.getenv('PAYMENT_CARD', '2200 7007 7007 7007')
+PAYMENT_PHONE = os.getenv('PAYMENT_PHONE', '+7 999 123-45-67')
 
 # ============= БАЗА ДАННЫХ =============
 DATABASE_PATH = os.getenv('DATABASE_PATH', 'bot.db')
 
 # ============= НАСТРОЙКИ РАССЫЛКИ =============
-MAILING_DELAY = float(os.getenv('MAILING_DELAY', '1.0'))  # секунд между сообщениями (анти-флуд)
+MAILING_DELAY = float(os.getenv('MAILING_DELAY', '2.0'))
 
 # ============= ЛОГИРОВАНИЕ =============
 LOG_LEVEL = os.getenv('LOG_LEVEL', 'INFO')

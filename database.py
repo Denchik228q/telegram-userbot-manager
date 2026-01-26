@@ -55,7 +55,6 @@ class Database:
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
-            logger.info("✅ Table 'users' created")
             
             # Таблица платежей
             self.cursor.execute("""
@@ -69,7 +68,6 @@ class Database:
                     FOREIGN KEY (user_id) REFERENCES users(telegram_id)
                 )
             """)
-            logger.info("✅ Table 'payments' created")
             
             # Таблица рассылок
             self.cursor.execute("""
@@ -83,7 +81,6 @@ class Database:
                     FOREIGN KEY (user_id) REFERENCES users(telegram_id)
                 )
             """)
-            logger.info("✅ Table 'mailings' created")
             
             # Таблица обращений в поддержку
             self.cursor.execute("""
@@ -96,16 +93,13 @@ class Database:
                     FOREIGN KEY (user_id) REFERENCES users(telegram_id)
                 )
             """)
-            logger.info("✅ Table 'support_tickets' created")
             
             self.conn.commit()
-            logger.info("✅ All tables created/updated successfully")
+            logger.info("✅ All tables created successfully")
             
         except Exception as e:
             logger.error(f"❌ Error creating tables: {e}")
             raise
-    
-    # ============= ПОЛЬЗОВАТЕЛИ =============
     
     def add_user(self, telegram_id: int, username: str = "", first_name: str = "", 
                  subscription_plan: str = "trial", subscription_end: datetime = None):
@@ -131,12 +125,9 @@ class Database:
             return False
     
     def get_user(self, telegram_id: int) -> Optional[Dict]:
-        """Получение пользователя по Telegram ID"""
+        """Получение пользователя"""
         try:
-            self.cursor.execute("""
-                SELECT * FROM users WHERE telegram_id = ?
-            """, (telegram_id,))
-            
+            self.cursor.execute("SELECT * FROM users WHERE telegram_id = ?", (telegram_id,))
             row = self.cursor.fetchone()
             
             if row:
@@ -153,9 +144,7 @@ class Database:
                     'created_at': datetime.fromisoformat(row['created_at']),
                     'updated_at': datetime.fromisoformat(row['updated_at'])
                 }
-            
             return None
-            
         except Exception as e:
             logger.error(f"❌ Error getting user: {e}")
             return None
@@ -181,17 +170,14 @@ class Database:
                     'created_at': datetime.fromisoformat(row['created_at']),
                     'updated_at': datetime.fromisoformat(row['updated_at'])
                 })
-            
             return users
-            
         except Exception as e:
-            logger.error(f"❌ Error getting all users: {e}")
+            logger.error(f"❌ Error getting users: {e}")
             return []
     
     def update_user(self, telegram_id: int, **kwargs):
-        """Обновление данных пользователя"""
+        """Обновление пользователя"""
         try:
-            # Разрешенные поля для обновления
             allowed_fields = ['username', 'first_name', 'phone_number', 'session_id', 
                             'subscription_plan', 'subscription_end', 'is_banned']
             
@@ -204,37 +190,21 @@ class Database:
                     values.append(value)
             
             if not updates:
-                logger.warning("⚠️ No valid fields to update")
                 return False
             
-            # Добавляем updated_at
             updates.append("updated_at = ?")
             values.append(datetime.now())
-            
-            # Добавляем telegram_id в конец для WHERE
             values.append(telegram_id)
             
             query = f"UPDATE users SET {', '.join(updates)} WHERE telegram_id = ?"
-            
             self.cursor.execute(query, values)
             self.conn.commit()
             
             logger.info(f"✅ User {telegram_id} updated")
             return True
-            
         except Exception as e:
             logger.error(f"❌ Error updating user: {e}")
             return False
-    
-    def ban_user(self, telegram_id: int):
-        """Блокировка пользователя"""
-        return self.update_user(telegram_id, is_banned=1)
-    
-    def unban_user(self, telegram_id: int):
-        """Разблокировка пользователя"""
-        return self.update_user(telegram_id, is_banned=0)
-    
-    # ============= ПЛАТЕЖИ =============
     
     def add_payment(self, user_id: int, amount: float, plan: str, status: str = 'pending'):
         """Добавление платежа"""
@@ -245,9 +215,7 @@ class Database:
             """, (user_id, amount, plan, status))
             
             self.conn.commit()
-            logger.info(f"✅ Payment added for user {user_id}")
             return self.cursor.lastrowid
-            
         except Exception as e:
             logger.error(f"❌ Error adding payment: {e}")
             return None
@@ -256,16 +224,11 @@ class Database:
         """Получение платежей"""
         try:
             if user_id:
-                self.cursor.execute("""
-                    SELECT * FROM payments WHERE user_id = ? ORDER BY created_at DESC
-                """, (user_id,))
+                self.cursor.execute("SELECT * FROM payments WHERE user_id = ? ORDER BY created_at DESC", (user_id,))
             else:
-                self.cursor.execute("""
-                    SELECT * FROM payments ORDER BY created_at DESC
-                """)
+                self.cursor.execute("SELECT * FROM payments ORDER BY created_at DESC")
             
             rows = self.cursor.fetchall()
-            
             payments = []
             for row in rows:
                 payments.append({
@@ -276,9 +239,7 @@ class Database:
                     'status': row['status'],
                     'created_at': datetime.fromisoformat(row['created_at'])
                 })
-            
             return payments
-            
         except Exception as e:
             logger.error(f"❌ Error getting payments: {e}")
             return []
@@ -286,19 +247,12 @@ class Database:
     def update_payment_status(self, payment_id: int, status: str):
         """Обновление статуса платежа"""
         try:
-            self.cursor.execute("""
-                UPDATE payments SET status = ? WHERE id = ?
-            """, (status, payment_id))
-            
+            self.cursor.execute("UPDATE payments SET status = ? WHERE id = ?", (status, payment_id))
             self.conn.commit()
-            logger.info(f"✅ Payment {payment_id} status updated to {status}")
             return True
-            
         except Exception as e:
-            logger.error(f"❌ Error updating payment status: {e}")
+            logger.error(f"❌ Error updating payment: {e}")
             return False
-    
-    # ============= РАССЫЛКИ =============
     
     def add_mailing(self, user_id: int, message_text: str, sent_count: int = 0, error_count: int = 0):
         """Добавление рассылки"""
@@ -307,16 +261,11 @@ class Database:
                 INSERT INTO mailings (user_id, message_text, sent_count, error_count)
                 VALUES (?, ?, ?, ?)
             """, (user_id, message_text, sent_count, error_count))
-            
             self.conn.commit()
-            logger.info(f"✅ Mailing added for user {user_id}")
             return self.cursor.lastrowid
-            
         except Exception as e:
             logger.error(f"❌ Error adding mailing: {e}")
             return None
-    
-    # ============= ПОДДЕРЖКА =============
     
     def add_support_ticket(self, user_id: int, message: str):
         """Добавление обращения в поддержку"""
@@ -325,78 +274,34 @@ class Database:
                 INSERT INTO support_tickets (user_id, message)
                 VALUES (?, ?)
             """, (user_id, message))
-            
             self.conn.commit()
-            logger.info(f"✅ Support ticket created for user {user_id}")
             return True
-            
         except Exception as e:
-            logger.error(f"❌ Error creating support ticket: {e}")
+            logger.error(f"❌ Error adding ticket: {e}")
             return False
-    
-    def get_support_tickets(self, status: str = None) -> List[Dict]:
-        """Получение обращений в поддержку"""
-        try:
-            if status:
-                self.cursor.execute("""
-                    SELECT * FROM support_tickets WHERE status = ? ORDER BY created_at DESC
-                """, (status,))
-            else:
-                self.cursor.execute("""
-                    SELECT * FROM support_tickets ORDER BY created_at DESC
-                """)
-            
-            rows = self.cursor.fetchall()
-            
-            tickets = []
-            for row in rows:
-                tickets.append({
-                    'id': row['id'],
-                    'user_id': row['user_id'],
-                    'message': row['message'],
-                    'status': row['status'],
-                    'created_at': datetime.fromisoformat(row['created_at'])
-                })
-            
-            return tickets
-            
-        except Exception as e:
-            logger.error(f"❌ Error getting support tickets: {e}")
-            return []
-    
-    # ============= СТАТИСТИКА =============
     
     def get_stats(self) -> Dict:
         """Получение статистики"""
         try:
             stats = {}
             
-            # Всего пользователей
             self.cursor.execute("SELECT COUNT(*) as count FROM users WHERE is_banned = 0")
             stats['total_users'] = self.cursor.fetchone()['count']
             
-            # Активные подписки
             self.cursor.execute("""
                 SELECT COUNT(*) as count FROM users 
                 WHERE subscription_end > ? AND subscription_plan != 'trial' AND is_banned = 0
             """, (datetime.now(),))
             stats['active_subscriptions'] = self.cursor.fetchone()['count']
             
-            # Новые пользователи за сегодня
             today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-            self.cursor.execute("""
-                SELECT COUNT(*) as count FROM users WHERE created_at >= ?
-            """, (today,))
+            self.cursor.execute("SELECT COUNT(*) as count FROM users WHERE created_at >= ?", (today,))
             stats['new_today'] = self.cursor.fetchone()['count']
             
-            # Новые за неделю
             week_ago = datetime.now() - timedelta(days=7)
-            self.cursor.execute("""
-                SELECT COUNT(*) as count FROM users WHERE created_at >= ?
-            """, (week_ago,))
+            self.cursor.execute("SELECT COUNT(*) as count FROM users WHERE created_at >= ?", (week_ago,))
             stats['new_week'] = self.cursor.fetchone()['count']
             
-            # По тарифам
             for plan in ['trial', 'amateur', 'pro', 'premium']:
                 self.cursor.execute("""
                     SELECT COUNT(*) as count FROM users 
@@ -405,37 +310,29 @@ class Database:
                 stats[f'{plan}_users'] = self.cursor.fetchone()['count']
             
             return stats
-            
         except Exception as e:
             logger.error(f"❌ Error getting stats: {e}")
             return {}
     
-    # ============= БЭКАП =============
-    
     def backup_database(self) -> str:
-        """Создание бэкапа базы данных"""
+        """Создание бэкапа"""
         try:
-            # Создаём директорию для бэкапов
             backup_dir = 'backups'
             os.makedirs(backup_dir, exist_ok=True)
             
-            # Имя файла бэкапа
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
             backup_path = os.path.join(backup_dir, f'backup_{timestamp}.db')
             
-            # Копируем базу данных
             import shutil
             shutil.copy2(self.db_path, backup_path)
             
-            logger.info(f"✅ Database backup created: {backup_path}")
+            logger.info(f"✅ Backup created: {backup_path}")
             return backup_path
-            
         except Exception as e:
             logger.error(f"❌ Error creating backup: {e}")
             raise
     
     def close(self):
-        """Закрытие соединения с БД"""
+        """Закрытие соединения"""
         if self.conn:
             self.conn.close()
-            logger.info("✅ Database connection closed")
