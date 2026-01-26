@@ -970,7 +970,7 @@ async def confirm_admin_mailing(update: Update, context: ContextTypes.DEFAULT_TY
         parse_mode='Markdown'
     )
     
-        for idx, user in enumerate(users, 1):
+    for idx, user in enumerate(users, 1):
         try:
             if mailing_message.text:
                 await context.bot.send_message(
