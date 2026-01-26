@@ -1019,7 +1019,7 @@ async def payment_select_plan(update: Update, context: ContextTypes.DEFAULT_TYPE
         f"{plan['description']}\n\n"
         f"💳 *Реквизиты для оплаты:*\n"
         f"Карта: `{PAYMENT_CARD}`\n"
-        f"Телефон: `{PAYMENT_PHONE}`\n\n"
+        f"СБП(На любой банк): `{PAYMENT_PHONE}`\n\n"
         f"❗ После оплаты нажмите 'Отправить чек' и пришлите скриншот платежа.",
         parse_mode='Markdown',
         reply_markup=InlineKeyboardMarkup(keyboard)
@@ -1277,7 +1277,7 @@ async def start_user_mailing(update: Update, context: ContextTypes.DEFAULT_TYPE)
     sent = 0
     errors = 0
     
-        await query.edit_message_text(
+    await query.edit_message_text(
         f"📨 *Рассылка запущена!*\n\n"
         f"Отправлено: 0/{len(targets)}\n"
         f"⏱️ Задержка между сообщениями: {MAILING_DELAY}s",
