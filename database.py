@@ -48,7 +48,7 @@ class Database:
                     first_name TEXT,
                     phone_number TEXT,
                     session_id TEXT,
-                    subscription_plan TEXT DEFAULT 'Trial',
+                    subscription_plan TEXT DEFAULT 'trial',
                     subscription_end TIMESTAMP,
                     is_banned BOOLEAN DEFAULT 0,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -75,10 +75,12 @@ class Database:
             self.cursor.execute("""
                 CREATE TABLE IF NOT EXISTS mailings (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER,
                     message_text TEXT,
                     sent_count INTEGER DEFAULT 0,
                     error_count INTEGER DEFAULT 0,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (user_id) REFERENCES users(telegram_id)
                 )
             """)
             logger.info("✅ Table 'mailings' created")
@@ -106,7 +108,7 @@ class Database:
     # ============= ПОЛЬЗОВАТЕЛИ =============
     
     def add_user(self, telegram_id: int, username: str = "", first_name: str = "", 
-                 subscription_plan: str = "Trial", subscription_end: datetime = None):
+                 subscription_plan: str = "trial", subscription_end: datetime = None):
         """Добавление нового пользователя"""
         try:
             if subscription_end is None:
@@ -244,11 +246,11 @@ class Database:
             
             self.conn.commit()
             logger.info(f"✅ Payment added for user {user_id}")
-            return True
+            return self.cursor.lastrowid
             
         except Exception as e:
             logger.error(f"❌ Error adding payment: {e}")
-            return False
+            return None
     
     def get_payments(self, user_id: int = None) -> List[Dict]:
         """Получение платежей"""
@@ -298,16 +300,16 @@ class Database:
     
     # ============= РАССЫЛКИ =============
     
-    def add_mailing(self, message_text: str, sent_count: int = 0, error_count: int = 0):
+    def add_mailing(self, user_id: int, message_text: str, sent_count: int = 0, error_count: int = 0):
         """Добавление рассылки"""
         try:
             self.cursor.execute("""
-                INSERT INTO mailings (message_text, sent_count, error_count)
-                VALUES (?, ?, ?)
-            """, (message_text, sent_count, error_count))
+                INSERT INTO mailings (user_id, message_text, sent_count, error_count)
+                VALUES (?, ?, ?, ?)
+            """, (user_id, message_text, sent_count, error_count))
             
             self.conn.commit()
-            logger.info("✅ Mailing added")
+            logger.info(f"✅ Mailing added for user {user_id}")
             return self.cursor.lastrowid
             
         except Exception as e:
@@ -376,7 +378,7 @@ class Database:
             # Активные подписки
             self.cursor.execute("""
                 SELECT COUNT(*) as count FROM users 
-                WHERE subscription_end > ? AND subscription_plan != 'Trial' AND is_banned = 0
+                WHERE subscription_end > ? AND subscription_plan != 'trial' AND is_banned = 0
             """, (datetime.now(),))
             stats['active_subscriptions'] = self.cursor.fetchone()['count']
             
@@ -395,12 +397,12 @@ class Database:
             stats['new_week'] = self.cursor.fetchone()['count']
             
             # По тарифам
-            for plan in ['Trial', 'basic', 'standard', 'vip']:
+            for plan in ['trial', 'amateur', 'pro', 'premium']:
                 self.cursor.execute("""
                     SELECT COUNT(*) as count FROM users 
                     WHERE subscription_plan = ? AND is_banned = 0
                 """, (plan,))
-                stats[f'{plan.lower()}_users'] = self.cursor.fetchone()['count']
+                stats[f'{plan}_users'] = self.cursor.fetchone()['count']
             
             return stats
             
