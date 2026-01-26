@@ -452,7 +452,7 @@ async def receive_password(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return PASSWORD
     except Exception as e:
-                logger.error(f"Error with 2FA: {e}")
+        logger.error(f"Error with 2FA: {e}")
         await update.message.reply_text("❌ Ошибка. Попробуйте позже")
         return ConversationHandler.END
 
