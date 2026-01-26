@@ -28,7 +28,7 @@ class UserbotManager:
         # Создаём директорию для сессий
         os.makedirs(self.sessions_dir, exist_ok=True)
         
-                logger.info("📦 UserbotManager initialized")
+        logger.info("📦 UserbotManager initialized")
     
     async def send_code(self, phone: str):
         """Отправка кода подтверждения на телефон"""
