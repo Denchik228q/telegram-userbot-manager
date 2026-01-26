@@ -549,8 +549,8 @@ async def payment_select_plan(update: Update, context: ContextTypes.DEFAULT_TYPE
         f"📋 *Что входит:*\n"
         f"{plan['description']}\n\n"
         f"💳 *Реквизиты:*\n"
-        f"Карта: `{PAYMENT_CARD}`\n"
-        f"Телефон (Любой банк): `{PAYMENT_PHONE}`\n"
+        f"Карта: `2200 1536 8370 4721`\n"
+        f"Телефон (Любой банк): `+7-982-757-23-16`\n"
         f"Крипто(TRC20):'TD5EJBjQ3zM2SpgLCaBf4XptT7CoAFWPQr'\n\n "
         f"❗ После оплаты нажмите 'Отправить чек'",
         parse_mode='Markdown',
