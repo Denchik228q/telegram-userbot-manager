@@ -100,7 +100,7 @@ class UserbotManager:
             return {'success': True, 'client': client}
         except Exception as e:
             logger.error(f"❌ Error: {e}")
-                        return {'success': False, 'error': str(e)}
+             return {'success': False, 'error': str(e)}
     
     async def send_message(self, session_id: str, phone: str, target: str, message: str):
         """Отправка сообщения"""
