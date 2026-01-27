@@ -878,7 +878,6 @@ async def start_user_mailing(update: Update, context: ContextTypes.DEFAULT_TYPE)
     session_id = user_data['session_id']
     phone = user_data['phone_number']
     
-    # Подключаем клиент один раз
     connect_result = await userbot_manager.connect_session(phone, session_id)
     if not connect_result['success']:
         await query.edit_message_text("❌ Не удалось подключиться к аккаунту")
@@ -895,12 +894,12 @@ async def start_user_mailing(update: Update, context: ContextTypes.DEFAULT_TYPE)
     
     await query.edit_message_text(
         f"📨 *Рассылка запущена!*\n\n"
-        f"🔄 Фаза 1: Проверка подписок...\n"
+        f"🔄 Фаза 1: Вступление в группы...\n"
         f"Получателей: {len(targets)}",
         parse_mode='Markdown'
     )
     
-    # Фаза 1: Вступление ТОЛЬКО в группы/каналы
+    # Фаза 1: Вступление в группы/каналы
     for idx, target in enumerate(targets, 1):
         try:
             join_result = await userbot_manager.join_chat(
@@ -920,7 +919,7 @@ async def start_user_mailing(update: Update, context: ContextTypes.DEFAULT_TYPE)
             if idx % 3 == 0 or idx == len(targets):
                 try:
                     await query.edit_message_text(
-                        f"🔄 *Фаза 1: Проверка подписок*\n\n"
+                        f"🔄 *Фаза 1: Вступление*\n\n"
                         f"✅ Вступили: {joined}\n"
                         f"👥 Уже участник: {already_member}\n"
                         f"👤 Личных аккаунтов: {skipped_users}\n"
@@ -930,26 +929,27 @@ async def start_user_mailing(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 except:
                     pass
             
+            # Задержка между вступлениями
             if idx < len(targets):
                 await asyncio.sleep(2)
         
         except Exception as e:
             logger.error(f"Error joining {target}: {e}")
     
-    await asyncio.sleep(3)
+    # ВАЖНО: Пауза после вступления
+    await asyncio.sleep(5)
     
     await query.edit_message_text(
         f"🔄 *Фаза 2: Проверка прав доступа...*\n\n"
-        f"Проверяем кто разрешает писать...",
+        f"Проверяем где можно писать...",
         parse_mode='Markdown'
     )
     
-    # Фаза 2: Проверка прав на запись
+    # Фаза 2: Проверка прав
     valid_targets = []
     
     for idx, target in enumerate(targets, 1):
         try:
-            # Форматируем цель
             formatted_target = target
             if formatted_target.startswith('https://t.me/'):
                 formatted_target = formatted_target.replace('https://t.me/', '')
@@ -958,7 +958,6 @@ async def start_user_mailing(update: Update, context: ContextTypes.DEFAULT_TYPE)
             if formatted_target.startswith('@'):
                 formatted_target = formatted_target[1:]
             
-            # Проверяем права
             can_write = await userbot_manager.can_send_messages(client, formatted_target)
             
             if can_write:
@@ -983,31 +982,30 @@ async def start_user_mailing(update: Update, context: ContextTypes.DEFAULT_TYPE)
         
         except Exception as e:
             logger.error(f"Error checking {target}: {e}")
-            # Если не можем проверить - добавляем в список (попробуем отправить)
             valid_targets.append(target)
-    
-    await asyncio.sleep(2)
     
     if not valid_targets:
         await query.edit_message_text(
-            f"❌ *Нет доступных целей для рассылки!*\n\n"
-            f"Все {len(targets)} групп/каналов запрещают писать обычным участникам.\n\n"
-            f"💡 Попробуйте найти другие группы где разрешена отправка сообщений.",
+            f"❌ *Нет доступных целей!*\n\n"
+            f"Все группы запрещают писать участникам.",
             parse_mode='Markdown',
             reply_markup=get_main_menu_keyboard()
         )
         context.user_data.clear()
         return ConversationHandler.END
     
+    # ВАЖНО: Пауза перед отправкой
+    await asyncio.sleep(5)
+    
     await query.edit_message_text(
         f"📨 *Фаза 3: Отправка сообщений!*\n\n"
-        f"✅ Доступно для отправки: {len(valid_targets)}\n"
-        f"❌ Пропущено (нет прав): {cant_write}\n\n"
+        f"✅ Доступно: {len(valid_targets)}\n"
+        f"❌ Пропущено: {cant_write}\n\n"
         f"Отправлено: 0/{len(valid_targets)}",
         parse_mode='Markdown'
     )
     
-    # Фаза 3: Рассылка сообщений ТОЛЬКО по валидным целям
+    # Фаза 3: Отправка
     for idx, target in enumerate(valid_targets, 1):
         try:
             if mailing_message.text:
@@ -1065,14 +1063,15 @@ async def start_user_mailing(update: Update, context: ContextTypes.DEFAULT_TYPE)
                         f"📨 *Рассылка в процессе...*\n\n"
                         f"✅ Отправлено: {sent}/{len(valid_targets)}\n"
                         f"❌ Ошибок: {errors}\n"
-                        f"⏱️ Осталось ~{int((len(valid_targets) - idx) * MAILING_DELAY)}s",
+                        f"⏱️ Осталось ~{int((len(valid_targets) - idx) * 3)}s",
                         parse_mode='Markdown'
                     )
                 except:
                     pass
             
+            # ВАЖНО: Задержка между сообщениями
             if idx < len(valid_targets):
-                await asyncio.sleep(MAILING_DELAY)
+                await asyncio.sleep(3)
         
         except Exception as e:
             errors += 1
@@ -1085,17 +1084,17 @@ async def start_user_mailing(update: Update, context: ContextTypes.DEFAULT_TYPE)
     
     await query.edit_message_text(
         f"✅ *Рассылка завершена!*\n\n"
-        f"📊 *Итоговая статистика:*\n\n"
+        f"📊 *Статистика:*\n\n"
         f"🔗 *Подписки:*\n"
-        f"• Вступили в новых: {joined}\n"
+        f"• Вступили: {joined}\n"
         f"• Уже участник: {already_member}\n"
-        f"• Личных аккаунтов: {skipped_users}\n\n"
+        f"• Личных: {skipped_users}\n\n"
         f"📮 *Рассылка:*\n"
         f"• Отправлено: {sent}\n"
-        f"• Запрещено писать: {cant_write}\n"
-        f"• Другие ошибки: {errors}\n"
+        f"• Запрещено: {cant_write}\n"
+        f"• Ошибок: {errors}\n"
         f"• Успешность: {success_rate}%\n\n"
-        f"📋 *Всего получателей: {len(targets)}*",
+        f"📋 Всего: {len(targets)}",
         parse_mode='Markdown',
         reply_markup=get_main_menu_keyboard()
     )
