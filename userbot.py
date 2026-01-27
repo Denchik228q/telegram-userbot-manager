@@ -275,7 +275,7 @@ class UserbotManager:
             logger.error(f"❌ Error: {e}")
             return {'success': False, 'error': str(e), 'skippable': True}
     
-        async def send_message(self, session_id: str, phone: str, target: str, message: str):
+async def send_message(self, session_id: str, phone: str, target: str, message: str):
         """Отправка сообщения"""
         try:
             client = self.sessions.get(session_id)
