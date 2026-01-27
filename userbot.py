@@ -8,10 +8,18 @@
 import os
 import logging
 from telethon import TelegramClient
-from telethon.errors import SessionPasswordNeededError, PhoneCodeInvalidError, ChannelPrivateError, InviteHashExpiredError
+from telethon.errors import (
+    SessionPasswordNeededError, 
+    PhoneCodeInvalidError, 
+    ChannelPrivateError, 
+    InviteHashExpiredError,
+    UserAlreadyParticipantError,
+    FloodWaitError
+)
 from telethon.sessions import StringSession
 from telethon.tl.functions.channels import JoinChannelRequest
 from telethon.tl.functions.messages import ImportChatInviteRequest
+from telethon.tl.types import Channel, Chat
 from config_userbot import API_ID, API_HASH, SESSIONS_DIR
 
 logger = logging.getLogger(__name__)
@@ -104,6 +112,20 @@ class UserbotManager:
             logger.error(f"❌ Error: {e}")
             return {'success': False, 'error': str(e)}
     
+    async def is_group_or_channel(self, client, target: str):
+        """Проверка: группа/канал или личный аккаунт"""
+        try:
+            entity = await client.get_entity(target)
+            # Проверяем тип: Channel (публичный канал/супергруппа) или Chat (обычная группа)
+            if isinstance(entity, (Channel, Chat)):
+                return True, entity
+            else:
+                # Это личный аккаунт
+                return False, None
+        except Exception as e:
+            logger.error(f"Error checking entity {target}: {e}")
+            return False, None
+    
     async def join_chat(self, session_id: str, phone: str, target: str):
         """Вступление в группу/канал"""
         try:
@@ -115,8 +137,11 @@ class UserbotManager:
                 client = connect_result['client']
             
             # Обработка разных форматов ссылок
+            original_target = target
             if target.startswith('https://t.me/'):
                 target = target.replace('https://t.me/', '')
+            if target.startswith('http://t.me/'):
+                target = target.replace('http://t.me/', '')
             if target.startswith('@'):
                 target = target[1:]
             
@@ -126,43 +151,58 @@ class UserbotManager:
                 invite_hash = target.split('+')[-1] if '+' in target else target.split('joinchat/')[-1]
                 try:
                     await client(ImportChatInviteRequest(invite_hash))
-                    logger.info(f"✅ Joined via invite: {target}")
-                    return {'success': True, 'joined': True}
+                    logger.info(f"✅ Joined via invite: {original_target}")
+                    return {'success': True, 'joined': True, 'type': 'invite'}
+                except UserAlreadyParticipantError:
+                    logger.info(f"✅ Already member (invite): {original_target}")
+                    return {'success': True, 'joined': False, 'already_member': True}
                 except InviteHashExpiredError:
-                    logger.error(f"❌ Invite expired: {target}")
-                    return {'success': False, 'error': 'Invite link expired'}
+                    logger.error(f"❌ Invite expired: {original_target}")
+                    return {'success': False, 'error': 'Invite expired', 'skippable': True}
+                except FloodWaitError as e:
+                    logger.error(f"❌ Flood wait {e.seconds}s: {original_target}")
+                    return {'success': False, 'error': f'Flood wait {e.seconds}s', 'skippable': True}
                 except Exception as e:
                     logger.error(f"❌ Error joining via invite: {e}")
-                    return {'success': False, 'error': str(e)}
+                    return {'success': False, 'error': str(e), 'skippable': True}
             else:
-                # Публичный канал/группа
+                # Публичный канал/группа или личный аккаунт
                 try:
-                    entity = await client.get_entity(target)
+                    # Проверяем тип
+                    is_group, entity = await self.is_group_or_channel(client, target)
                     
-                    # Проверяем, состоим ли уже
+                    if not is_group:
+                        # Это личный аккаунт - пропускаем вступление
+                        logger.info(f"⏭️ Skipping user account: {original_target}")
+                        return {'success': True, 'joined': False, 'is_user': True}
+                    
+                    # Это группа/канал - проверяем участие
                     try:
                         participant = await client.get_permissions(entity)
                         if participant:
-                            logger.info(f"✅ Already member: {target}")
+                            logger.info(f"✅ Already member: {original_target}")
                             return {'success': True, 'joined': False, 'already_member': True}
                     except:
                         pass
                     
                     # Вступаем
                     await client(JoinChannelRequest(entity))
-                    logger.info(f"✅ Joined channel: {target}")
-                    return {'success': True, 'joined': True}
+                    logger.info(f"✅ Joined channel: {original_target}")
+                    return {'success': True, 'joined': True, 'type': 'public'}
                     
                 except ChannelPrivateError:
-                    logger.error(f"❌ Channel is private: {target}")
-                    return {'success': False, 'error': 'Channel is private'}
+                    logger.error(f"❌ Channel is private: {original_target}")
+                    return {'success': False, 'error': 'Channel is private', 'skippable': True}
+                except FloodWaitError as e:
+                    logger.error(f"❌ Flood wait {e.seconds}s: {original_target}")
+                    return {'success': False, 'error': f'Flood wait {e.seconds}s', 'skippable': True}
                 except Exception as e:
                     logger.error(f"❌ Error joining: {e}")
-                    return {'success': False, 'error': str(e)}
+                    return {'success': False, 'error': str(e), 'skippable': True}
                     
         except Exception as e:
             logger.error(f"❌ Error: {e}")
-            return {'success': False, 'error': str(e)}
+            return {'success': False, 'error': str(e), 'skippable': True}
     
     async def send_message(self, session_id: str, phone: str, target: str, message: str):
         """Отправка сообщения"""
@@ -176,6 +216,8 @@ class UserbotManager:
             
             if target.startswith('https://t.me/'):
                 target = target.replace('https://t.me/', '')
+            if target.startswith('http://t.me/'):
+                target = target.replace('http://t.me/', '')
             if target.startswith('@'):
                 target = target[1:]
             
@@ -183,7 +225,7 @@ class UserbotManager:
             logger.info(f"✅ Message sent to {target}")
             return {'success': True}
         except Exception as e:
-            logger.error(f"❌ Error: {e}")
+            logger.error(f"❌ Error sending to {target}: {e}")
             return {'success': False, 'error': str(e)}
     
     async def send_photo(self, session_id: str, phone: str, target: str, photo_path: str, caption: str = ""):
@@ -198,6 +240,8 @@ class UserbotManager:
             
             if target.startswith('https://t.me/'):
                 target = target.replace('https://t.me/', '')
+            if target.startswith('http://t.me/'):
+                target = target.replace('http://t.me/', '')
             if target.startswith('@'):
                 target = target[1:]
             
@@ -220,6 +264,8 @@ class UserbotManager:
             
             if target.startswith('https://t.me/'):
                 target = target.replace('https://t.me/', '')
+            if target.startswith('http://t.me/'):
+                target = target.replace('http://t.me/', '')
             if target.startswith('@'):
                 target = target[1:]
             

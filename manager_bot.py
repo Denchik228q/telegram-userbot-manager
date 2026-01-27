@@ -787,15 +787,16 @@ async def start_user_mailing(update: Update, context: ContextTypes.DEFAULT_TYPE)
     errors = 0
     joined = 0
     already_member = 0
+    skipped_users = 0
     
     await query.edit_message_text(
         f"📨 *Рассылка запущена!*\n\n"
-        f"🔄 Проверка подписок...\n"
+        f"🔄 Проверка подписок на группы/каналы...\n"
         f"Получателей: {len(targets)}",
         parse_mode='Markdown'
     )
     
-    # Фаза 1: Вступление в группы/каналы
+    # Фаза 1: Вступление ТОЛЬКО в группы/каналы (не в личные аккаунты)
     for idx, target in enumerate(targets, 1):
         try:
             # Пытаемся вступить (если это группа/канал)
@@ -812,39 +813,48 @@ async def start_user_mailing(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 elif join_result.get('already_member'):
                     already_member += 1
                     logger.info(f"✅ Already member: {target}")
+                elif join_result.get('is_user'):
+                    skipped_users += 1
+                    logger.info(f"⏭️ Skipped user: {target}")
+            else:
+                # Ошибка при вступлении, но продолжаем
+                if join_result.get('skippable'):
+                    logger.warning(f"⚠️ Skipped (error): {target}")
             
-            # Обновляем прогресс каждые 5 целей
-            if idx % 5 == 0 or idx == len(targets):
+            # Обновляем прогресс каждые 3 цели
+            if idx % 3 == 0 or idx == len(targets):
                 try:
                     await query.edit_message_text(
                         f"🔄 *Проверка подписок...*\n\n"
-                        f"✅ Вступили: {joined}\n"
+                        f"✅ Вступили в новых: {joined}\n"
                         f"👥 Уже участник: {already_member}\n"
+                        f"👤 Личных аккаунтов: {skipped_users}\n"
                         f"📊 Проверено: {idx}/{len(targets)}",
                         parse_mode='Markdown'
                     )
                 except:
                     pass
             
-            # Задержка между вступлениями
+            # Задержка между вступлениями (антифлуд)
             if idx < len(targets):
-                await asyncio.sleep(3)  # 3 секунды между вступлениями
+                await asyncio.sleep(2)
         
         except Exception as e:
-            logger.error(f"Error joining {target}: {e}")
+            logger.error(f"Error processing {target}: {e}")
     
     # Пауза перед рассылкой
-    await asyncio.sleep(5)
+    await asyncio.sleep(3)
     
     await query.edit_message_text(
-        f"📨 *Начинаем рассылку!*\n\n"
+        f"📨 *Начинаем рассылку сообщений!*\n\n"
         f"✅ Вступили в новых: {joined}\n"
-        f"👥 Уже участник: {already_member}\n\n"
+        f"👥 Уже участник: {already_member}\n"
+        f"👤 Личных аккаунтов: {skipped_users}\n\n"
         f"Отправлено: 0/{len(targets)}",
         parse_mode='Markdown'
     )
     
-    # Фаза 2: Рассылка сообщений
+    # Фаза 2: Рассылка сообщений ВСЕМ (группы + личные аккаунты)
     for idx, target in enumerate(targets, 1):
         try:
             if mailing_message.text:
@@ -894,7 +904,9 @@ async def start_user_mailing(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 sent += 1
             else:
                 errors += 1
+                logger.error(f"Failed to send to {target}: {result.get('error')}")
             
+            # Обновляем прогресс каждые 5 сообщений
             if idx % 5 == 0 or idx == len(targets):
                 try:
                     await query.edit_message_text(
@@ -907,24 +919,28 @@ async def start_user_mailing(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 except:
                     pass
             
+            # Задержка между сообщениями (антифлуд)
             if idx < len(targets):
                 await asyncio.sleep(MAILING_DELAY)
         
         except Exception as e:
             errors += 1
-            logger.error(f"Error in mailing: {e}")
+            logger.error(f"Error sending to {target}: {e}")
     
     message_text = mailing_message.text or mailing_message.caption or "[Медиа]"
     db.add_mailing(user_id, message_text, sent, errors)
     
     await query.edit_message_text(
         f"✅ *Рассылка завершена!*\n\n"
-        f"📊 *Статистика:*\n"
-        f"🔗 Вступили в новых: {joined}\n"
-        f"👥 Уже участник: {already_member}\n"
-        f"✅ Отправлено сообщений: {sent}\n"
-        f"❌ Ошибок: {errors}\n"
-        f"📮 Всего получателей: {len(targets)}",
+        f"📊 *Итоговая статистика:*\n\n"
+        f"🔗 *Подписки:*\n"
+        f"• Вступили в новых: {joined}\n"
+        f"• Уже участник: {already_member}\n"
+        f"• Пропущено (личные): {skipped_users}\n\n"
+        f"📮 *Рассылка:*\n"
+        f"• Отправлено: {sent}\n"
+        f"• Ошибок: {errors}\n"
+        f"• Всего получателей: {len(targets)}",
         parse_mode='Markdown',
         reply_markup=get_main_menu_keyboard()
     )
