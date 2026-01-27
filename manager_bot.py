@@ -575,6 +575,101 @@ async def send_receipt_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE
     return PAYMENT_RECEIPT
 
 
+async def test_send_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Команда /test - тестовая отправка в один чат"""
+    user_id = update.effective_user.id
+    
+    if user_id != ADMIN_ID:
+        await update.message.reply_text("❌ Только для админа")
+        return
+    
+    # Получаем юзера
+    user_data = db.get_user(user_id)
+    if not user_data or not user_data.get('session_id'):
+        await update.message.reply_text("❌ Аккаунт не подключен")
+        return
+    
+    # Запрашиваем цель
+    await update.message.reply_text(
+        "🧪 *Тестовая отправка*\n\n"
+        "Отправь username или ссылку на группу/канал:",
+        parse_mode='Markdown'
+    )
+    
+    return 'test_target'
+
+async def test_target_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Получение цели для теста"""
+    user_id = update.effective_user.id
+    target = update.message.text.strip()
+    
+    context.user_data['test_target'] = target
+    
+    await update.message.reply_text(
+        f"🎯 Цель: `{target}`\n\n"
+        f"Отправь сообщение для теста:",
+        parse_mode='Markdown'
+    )
+    
+    return 'test_message'
+
+async def test_message_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Получение сообщения и отправка теста"""
+    user_id = update.effective_user.id
+    target = context.user_data.get('test_target')
+    message = update.message.text
+    
+    user_data = db.get_user(user_id)
+    session_id = user_data['session_id']
+    phone = user_data['phone_number']
+    
+    await update.message.reply_text("🔄 Тестирую отправку...")
+    
+    # Подключаем клиент
+    connect_result = await userbot_manager.connect_session(phone, session_id)
+    if not connect_result['success']:
+        await update.message.reply_text("❌ Не удалось подключиться")
+        return ConversationHandler.END
+    
+    client = connect_result['client']
+    
+    # Проверяем права
+    can_write = await userbot_manager.can_send_messages(client, target)
+    
+    await update.message.reply_text(
+        f"📋 *Проверка прав:*\n"
+        f"Цель: `{target}`\n"
+        f"Можно писать: {'✅ Да' if can_write else '❌ Нет'}",
+        parse_mode='Markdown'
+    )
+    
+    # Пробуем отправить
+    result = await userbot_manager.send_message(
+        session_id=session_id,
+        phone=phone,
+        target=target,
+        message=message
+    )
+    
+    if result['success']:
+        await update.message.reply_text(
+            f"✅ *Сообщение отправлено!*\n\n"
+            f"Цель: `{target}`\n"
+            f"Текст: {message}",
+            parse_mode='Markdown'
+        )
+    else:
+        await update.message.reply_text(
+            f"❌ *Ошибка отправки!*\n\n"
+            f"Цель: `{target}`\n"
+            f"Ошибка: `{result.get('error')}`",
+            parse_mode='Markdown'
+        )
+    
+    context.user_data.clear()
+    return ConversationHandler.END
+
+
 async def receive_receipt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Получение чека"""
     user_id = update.effective_user.id
@@ -1558,6 +1653,15 @@ def main():
     application.add_handler(CallbackQueryHandler(confirm_payment_admin, pattern="^confirm_pay_"))
     application.add_handler(CallbackQueryHandler(admin_backup, pattern="^admin_backup$"))
     application.add_handler(CallbackQueryHandler(back_to_admin_callback, pattern="^back_to_admin$"))
+    test_conv = ConversationHandler(
+        entry_points=[CommandHandler("test", test_send_command)],
+        states={
+            'test_target': [MessageHandler(filters.TEXT & ~filters.COMMAND, test_target_received)],
+            'test_message': [MessageHandler(filters.TEXT & ~filters.COMMAND, test_message_received)],
+        },
+        fallbacks=[CommandHandler("cancel", cancel)]
+    )
+    application.add_handler(test_conv)
    
     loop = asyncio.get_event_loop()
     loop.create_task(backup_scheduler.run_daily_backup())

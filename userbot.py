@@ -126,34 +126,74 @@ class UserbotManager:
             logger.error(f"Error checking entity {target}: {e}")
             return False, None
 
-        async def can_send_messages(self, client, target: str):
-            """Проверка: можем ли писать в чат"""
+            async def can_send_messages(self, client, target: str):
+        """Проверка: можем ли писать в чат"""
         try:
+            # Форматируем таргет
+            if target.startswith('https://t.me/'):
+                target = target.replace('https://t.me/', '')
+            if target.startswith('http://t.me/'):
+                target = target.replace('http://t.me/', '')
+            if target.startswith('@'):
+                target = target[1:]
+            
             entity = await client.get_entity(target)
             
-            # Получаем права в чате
-            permissions = await client.get_permissions(entity)
+            from telethon.tl.types import Channel, Chat, User
             
-            # Проверяем права на отправку сообщений
-            if hasattr(permissions, 'send_messages'):
-                return permissions.send_messages
+            # Если это личка - можем писать
+            if isinstance(entity, User):
+                logger.info(f"✅ {target} is User - can write")
+                return True
             
-            # Если нет атрибута - пробуем определить по типу
-            from telethon.tl.types import Channel
+            # Если это обычная группа - можем писать
+            if isinstance(entity, Chat):
+                logger.info(f"✅ {target} is Chat - can write")
+                return True
+            
+            # Если это канал/супергруппа
             if isinstance(entity, Channel):
-                # Если канал - проверяем broadcast
-                if entity.broadcast:
-                    # Это канал, только админы могут писать
-                    return False
-                # Это супергруппа - проверяем права
-                return not entity.default_banned_rights or entity.default_banned_rights.send_messages is False
+                # Получаем права
+                try:
+                    permissions = await client.get_permissions(entity)
+                    
+                    # Проверяем конкретные права
+                    if hasattr(permissions, 'is_banned') and permissions.is_banned:
+                        logger.warning(f"❌ {target} - user is BANNED")
+                        return False
+                    
+                    if hasattr(permissions, 'send_messages'):
+                        can_send = permissions.send_messages
+                        logger.info(f"{'✅' if can_send else '❌'} {target} - send_messages={can_send}")
+                        return can_send
+                    
+                    # Если канал broadcast (только админы пишут)
+                    if entity.broadcast:
+                        logger.warning(f"❌ {target} - is broadcast channel (admins only)")
+                        return False
+                    
+                    # Проверяем default_banned_rights
+                    if entity.default_banned_rights:
+                        can_send = not entity.default_banned_rights.send_messages
+                        logger.info(f"{'✅' if can_send else '❌'} {target} - default rights: {can_send}")
+                        return can_send
+                    
+                    # Если нет явных запретов - можем писать
+                    logger.info(f"✅ {target} - no restrictions")
+                    return True
+                    
+                except Exception as perm_err:
+                    logger.error(f"⚠️ Can't check permissions for {target}: {perm_err}")
+                    # Если не можем проверить - лучше попробовать отправить
+                    return True
             
-            # Для обычных групп и личек - можем писать
+            # Неизвестный тип - пробуем писать
+            logger.warning(f"⚠️ {target} - unknown type: {entity.__class__.__name__}")
             return True
             
         except Exception as e:
-            logger.error(f"Error checking permissions for {target}: {e}")
-            # Если не можем проверить - пытаемся отправить
+            logger.error(f"❌ Error checking {target}: {e}")
+            # При ошибке проверки - пробуем отправить
             return True
 
     
@@ -235,7 +275,7 @@ class UserbotManager:
             logger.error(f"❌ Error: {e}")
             return {'success': False, 'error': str(e), 'skippable': True}
     
-    async def send_message(self, session_id: str, phone: str, target: str, message: str):
+        async def send_message(self, session_id: str, phone: str, target: str, message: str):
         """Отправка сообщения"""
         try:
             client = self.sessions.get(session_id)
@@ -245,6 +285,8 @@ class UserbotManager:
                     return {'success': False, 'error': 'Session not connected'}
                 client = connect_result['client']
             
+            # Форматирование таргета
+            original_target = target
             if target.startswith('https://t.me/'):
                 target = target.replace('https://t.me/', '')
             if target.startswith('http://t.me/'):
@@ -252,11 +294,43 @@ class UserbotManager:
             if target.startswith('@'):
                 target = target[1:]
             
-            await client.send_message(target, message)
-            logger.info(f"✅ Message sent to {target}")
-            return {'success': True}
+            logger.info(f"🔄 Attempting to send to: {target}")
+            
+            try:
+                # Получаем entity
+                entity = await client.get_entity(target)
+                logger.info(f"✅ Entity found: {entity.__class__.__name__} - {getattr(entity, 'title', target)}")
+                
+                # Проверяем права ЕЩЁ РАЗ перед отправкой
+                try:
+                    permissions = await client.get_permissions(entity)
+                    logger.info(f"📋 Permissions: send_messages={getattr(permissions, 'send_messages', 'unknown')}")
+                except Exception as perm_err:
+                    logger.warning(f"⚠️ Can't get permissions: {perm_err}")
+                
+                # Пытаемся отправить
+                await client.send_message(entity, message)
+                logger.info(f"✅ Message sent to {target}")
+                return {'success': True}
+                
+            except Exception as send_err:
+                error_msg = str(send_err)
+                logger.error(f"❌ Send error for {target}: {error_msg}")
+                
+                # Детальная информация об ошибке
+                if "can't write" in error_msg.lower():
+                    logger.error(f"❌ WRITE FORBIDDEN in {target}")
+                elif "flood" in error_msg.lower():
+                    logger.error(f"❌ FLOOD WAIT in {target}")
+                elif "banned" in error_msg.lower():
+                    logger.error(f"❌ BANNED in {target}")
+                else:
+                    logger.error(f"❌ UNKNOWN ERROR in {target}: {error_msg}")
+                
+                return {'success': False, 'error': error_msg}
+                
         except Exception as e:
-            logger.error(f"❌ Error sending to {target}: {e}")
+            logger.error(f"❌ Fatal error: {e}")
             return {'success': False, 'error': str(e)}
     
     async def send_photo(self, session_id: str, phone: str, target: str, photo_path: str, caption: str = ""):
@@ -269,6 +343,7 @@ class UserbotManager:
                     return {'success': False, 'error': 'Session not connected'}
                 client = connect_result['client']
             
+            original_target = target
             if target.startswith('https://t.me/'):
                 target = target.replace('https://t.me/', '')
             if target.startswith('http://t.me/'):
@@ -276,11 +351,22 @@ class UserbotManager:
             if target.startswith('@'):
                 target = target[1:]
             
-            await client.send_file(target, photo_path, caption=caption)
-            logger.info(f"✅ Photo sent to {target}")
-            return {'success': True}
+            logger.info(f"🔄 Attempting to send photo to: {target}")
+            
+            try:
+                entity = await client.get_entity(target)
+                logger.info(f"✅ Entity found: {entity.__class__.__name__}")
+                
+                await client.send_file(entity, photo_path, caption=caption)
+                logger.info(f"✅ Photo sent to {target}")
+                return {'success': True}
+                
+            except Exception as send_err:
+                logger.error(f"❌ Send photo error for {target}: {send_err}")
+                return {'success': False, 'error': str(send_err)}
+                
         except Exception as e:
-            logger.error(f"❌ Error: {e}")
+            logger.error(f"❌ Fatal error: {e}")
             return {'success': False, 'error': str(e)}
     
     async def send_video(self, session_id: str, phone: str, target: str, video_path: str, caption: str = ""):
@@ -293,6 +379,7 @@ class UserbotManager:
                     return {'success': False, 'error': 'Session not connected'}
                 client = connect_result['client']
             
+            original_target = target
             if target.startswith('https://t.me/'):
                 target = target.replace('https://t.me/', '')
             if target.startswith('http://t.me/'):
@@ -300,11 +387,22 @@ class UserbotManager:
             if target.startswith('@'):
                 target = target[1:]
             
-            await client.send_file(target, video_path, caption=caption)
-            logger.info(f"✅ Video sent to {target}")
-            return {'success': True}
+            logger.info(f"🔄 Attempting to send video to: {target}")
+            
+            try:
+                entity = await client.get_entity(target)
+                logger.info(f"✅ Entity found: {entity.__class__.__name__}")
+                
+                await client.send_file(entity, video_path, caption=caption)
+                logger.info(f"✅ Video sent to {target}")
+                return {'success': True}
+                
+            except Exception as send_err:
+                logger.error(f"❌ Send video error for {target}: {send_err}")
+                return {'success': False, 'error': str(send_err)}
+                
         except Exception as e:
-            logger.error(f"❌ Error: {e}")
+            logger.error(f"❌ Fatal error: {e}")
             return {'success': False, 'error': str(e)}
     
     async def disconnect_session(self, session_id: str):
