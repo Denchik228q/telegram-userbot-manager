@@ -8,6 +8,7 @@ Telegram Manager Bot
 import logging
 import asyncio
 import os
+from backup_scheduler import backup_scheduler
 from datetime import datetime, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -1288,7 +1289,7 @@ async def confirm_payment_admin(update: Update, context: ContextTypes.DEFAULT_TY
 
 
 async def admin_backup(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Создать бэкап"""
+    """Создать бэкап из админ-панели"""
     query = update.callback_query
     await query.answer()
     
@@ -1298,28 +1299,53 @@ async def admin_backup(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer("❌ Доступ запрещён", show_alert=True)
         return
     
-    try:
-        backup_path = db.backup_database()
-        users_count = len(db.get_all_users())
-        
+    await query.edit_message_text(
+        "🔄 *Создаю бэкап...*",
+        parse_mode='Markdown'
+    )
+    
+    success = await backup_scheduler.manual_backup()
+    
+    if success:
         await query.edit_message_text(
-            f"✅ *Бэкап создан!*\n\n"
-            f"📁 Файл: `{backup_path}`\n"
-            f"👥 Пользователей: {users_count}\n"
-            f"⏰ Время: {datetime.now().strftime('%d.%m.%Y %H:%M:%S')}",
+            "✅ *Бэкап создан успешно!*\n\n"
+            "📦 Файл отправлен вам в личные сообщения.\n"
+            "💾 Также сохранён на сервере.",
             parse_mode='Markdown',
             reply_markup=InlineKeyboardMarkup([[
                 InlineKeyboardButton("◀️ Назад", callback_data="back_to_admin")
             ]])
         )
-    except Exception as e:
-        logger.error(f"Error creating backup: {e}")
+    else:
         await query.edit_message_text(
-            f"❌ Ошибка при создании бэкапа:\n{str(e)}",
+            "❌ *Ошибка при создании бэкапа*\n\n"
+            "Проверьте логи сервера.",
+            parse_mode='Markdown',
             reply_markup=InlineKeyboardMarkup([[
                 InlineKeyboardButton("◀️ Назад", callback_data="back_to_admin")
             ]])
         )
+
+
+async def manual_backup_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Команда /backup - ручной бэкап"""
+    user_id = update.effective_user.id
+    
+    if user_id != ADMIN_ID:
+        await update.message.reply_text("❌ У вас нет доступа")
+        return
+    
+    await update.message.reply_text("🔄 Создаю бэкап...")
+    
+    success = await backup_scheduler.manual_backup()
+    
+    if success:
+        await update.message.reply_text(
+            "✅ Бэкап создан!\n\n"
+            "Файл отправлен вам в личные сообщения."
+        )
+    else:
+        await update.message.reply_text("❌ Ошибка при создании бэкапа")
 
 
 async def back_to_admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1456,9 +1482,13 @@ def main():
     application.add_handler(CallbackQueryHandler(confirm_payment_admin, pattern="^confirm_pay_"))
     application.add_handler(CallbackQueryHandler(admin_backup, pattern="^admin_backup$"))
     application.add_handler(CallbackQueryHandler(back_to_admin_callback, pattern="^back_to_admin$"))
+   
+    loop = asyncio.get_event_loop()
+    loop.create_task(backup_scheduler.run_daily_backup())
     
     logger.info("🚀 Manager Bot started!")
     logger.info(f"👤 Admin ID: {ADMIN_ID}")
+    logger.info(f"⏰ Auto-backup scheduled at 23:55 daily")
     
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
