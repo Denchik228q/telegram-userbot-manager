@@ -783,23 +783,31 @@ async def start_user_mailing(update: Update, context: ContextTypes.DEFAULT_TYPE)
     session_id = user_data['session_id']
     phone = user_data['phone_number']
     
+    # Подключаем клиент один раз
+    connect_result = await userbot_manager.connect_session(phone, session_id)
+    if not connect_result['success']:
+        await query.edit_message_text("❌ Не удалось подключиться к аккаунту")
+        return ConversationHandler.END
+    
+    client = connect_result['client']
+    
     sent = 0
     errors = 0
     joined = 0
     already_member = 0
     skipped_users = 0
+    cant_write = 0
     
     await query.edit_message_text(
         f"📨 *Рассылка запущена!*\n\n"
-        f"🔄 Проверка подписок на группы/каналы...\n"
+        f"🔄 Фаза 1: Проверка подписок...\n"
         f"Получателей: {len(targets)}",
         parse_mode='Markdown'
     )
     
-    # Фаза 1: Вступление ТОЛЬКО в группы/каналы (не в личные аккаунты)
+    # Фаза 1: Вступление ТОЛЬКО в группы/каналы
     for idx, target in enumerate(targets, 1):
         try:
-            # Пытаемся вступить (если это группа/канал)
             join_result = await userbot_manager.join_chat(
                 session_id=session_id,
                 phone=phone,
@@ -809,24 +817,16 @@ async def start_user_mailing(update: Update, context: ContextTypes.DEFAULT_TYPE)
             if join_result.get('success'):
                 if join_result.get('joined'):
                     joined += 1
-                    logger.info(f"✅ Joined: {target}")
                 elif join_result.get('already_member'):
                     already_member += 1
-                    logger.info(f"✅ Already member: {target}")
                 elif join_result.get('is_user'):
                     skipped_users += 1
-                    logger.info(f"⏭️ Skipped user: {target}")
-            else:
-                # Ошибка при вступлении, но продолжаем
-                if join_result.get('skippable'):
-                    logger.warning(f"⚠️ Skipped (error): {target}")
             
-            # Обновляем прогресс каждые 3 цели
             if idx % 3 == 0 or idx == len(targets):
                 try:
                     await query.edit_message_text(
-                        f"🔄 *Проверка подписок...*\n\n"
-                        f"✅ Вступили в новых: {joined}\n"
+                        f"🔄 *Фаза 1: Проверка подписок*\n\n"
+                        f"✅ Вступили: {joined}\n"
                         f"👥 Уже участник: {already_member}\n"
                         f"👤 Личных аккаунтов: {skipped_users}\n"
                         f"📊 Проверено: {idx}/{len(targets)}",
@@ -835,27 +835,85 @@ async def start_user_mailing(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 except:
                     pass
             
-            # Задержка между вступлениями (антифлуд)
             if idx < len(targets):
                 await asyncio.sleep(2)
         
         except Exception as e:
-            logger.error(f"Error processing {target}: {e}")
+            logger.error(f"Error joining {target}: {e}")
     
-    # Пауза перед рассылкой
     await asyncio.sleep(3)
     
     await query.edit_message_text(
-        f"📨 *Начинаем рассылку сообщений!*\n\n"
-        f"✅ Вступили в новых: {joined}\n"
-        f"👥 Уже участник: {already_member}\n"
-        f"👤 Личных аккаунтов: {skipped_users}\n\n"
-        f"Отправлено: 0/{len(targets)}",
+        f"🔄 *Фаза 2: Проверка прав доступа...*\n\n"
+        f"Проверяем кто разрешает писать...",
         parse_mode='Markdown'
     )
     
-    # Фаза 2: Рассылка сообщений ВСЕМ (группы + личные аккаунты)
+    # Фаза 2: Проверка прав на запись
+    valid_targets = []
+    
     for idx, target in enumerate(targets, 1):
+        try:
+            # Форматируем цель
+            formatted_target = target
+            if formatted_target.startswith('https://t.me/'):
+                formatted_target = formatted_target.replace('https://t.me/', '')
+            if formatted_target.startswith('http://t.me/'):
+                formatted_target = formatted_target.replace('http://t.me/', '')
+            if formatted_target.startswith('@'):
+                formatted_target = formatted_target[1:]
+            
+            # Проверяем права
+            can_write = await userbot_manager.can_send_messages(client, formatted_target)
+            
+            if can_write:
+                valid_targets.append(target)
+            else:
+                cant_write += 1
+                logger.info(f"⚠️ Can't write to {target}")
+            
+            if idx % 5 == 0 or idx == len(targets):
+                try:
+                    await query.edit_message_text(
+                        f"🔄 *Фаза 2: Проверка прав*\n\n"
+                        f"✅ Можно писать: {len(valid_targets)}\n"
+                        f"❌ Запрещено: {cant_write}\n"
+                        f"📊 Проверено: {idx}/{len(targets)}",
+                        parse_mode='Markdown'
+                    )
+                except:
+                    pass
+            
+            await asyncio.sleep(1)
+        
+        except Exception as e:
+            logger.error(f"Error checking {target}: {e}")
+            # Если не можем проверить - добавляем в список (попробуем отправить)
+            valid_targets.append(target)
+    
+    await asyncio.sleep(2)
+    
+    if not valid_targets:
+        await query.edit_message_text(
+            f"❌ *Нет доступных целей для рассылки!*\n\n"
+            f"Все {len(targets)} групп/каналов запрещают писать обычным участникам.\n\n"
+            f"💡 Попробуйте найти другие группы где разрешена отправка сообщений.",
+            parse_mode='Markdown',
+            reply_markup=get_main_menu_keyboard()
+        )
+        context.user_data.clear()
+        return ConversationHandler.END
+    
+    await query.edit_message_text(
+        f"📨 *Фаза 3: Отправка сообщений!*\n\n"
+        f"✅ Доступно для отправки: {len(valid_targets)}\n"
+        f"❌ Пропущено (нет прав): {cant_write}\n\n"
+        f"Отправлено: 0/{len(valid_targets)}",
+        parse_mode='Markdown'
+    )
+    
+    # Фаза 3: Рассылка сообщений ТОЛЬКО по валидным целям
+    for idx, target in enumerate(valid_targets, 1):
         try:
             if mailing_message.text:
                 result = await userbot_manager.send_message(
@@ -906,21 +964,19 @@ async def start_user_mailing(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 errors += 1
                 logger.error(f"Failed to send to {target}: {result.get('error')}")
             
-            # Обновляем прогресс каждые 5 сообщений
-            if idx % 5 == 0 or idx == len(targets):
+            if idx % 5 == 0 or idx == len(valid_targets):
                 try:
                     await query.edit_message_text(
                         f"📨 *Рассылка в процессе...*\n\n"
-                        f"✅ Отправлено: {sent}/{len(targets)}\n"
+                        f"✅ Отправлено: {sent}/{len(valid_targets)}\n"
                         f"❌ Ошибок: {errors}\n"
-                        f"⏱️ Осталось ~{int((len(targets) - idx) * MAILING_DELAY)}s",
+                        f"⏱️ Осталось ~{int((len(valid_targets) - idx) * MAILING_DELAY)}s",
                         parse_mode='Markdown'
                     )
                 except:
                     pass
             
-            # Задержка между сообщениями (антифлуд)
-            if idx < len(targets):
+            if idx < len(valid_targets):
                 await asyncio.sleep(MAILING_DELAY)
         
         except Exception as e:
@@ -930,17 +986,21 @@ async def start_user_mailing(update: Update, context: ContextTypes.DEFAULT_TYPE)
     message_text = mailing_message.text or mailing_message.caption or "[Медиа]"
     db.add_mailing(user_id, message_text, sent, errors)
     
+    success_rate = int((sent / len(targets)) * 100) if targets else 0
+    
     await query.edit_message_text(
         f"✅ *Рассылка завершена!*\n\n"
         f"📊 *Итоговая статистика:*\n\n"
         f"🔗 *Подписки:*\n"
         f"• Вступили в новых: {joined}\n"
         f"• Уже участник: {already_member}\n"
-        f"• Пропущено (личные): {skipped_users}\n\n"
+        f"• Личных аккаунтов: {skipped_users}\n\n"
         f"📮 *Рассылка:*\n"
         f"• Отправлено: {sent}\n"
-        f"• Ошибок: {errors}\n"
-        f"• Всего получателей: {len(targets)}",
+        f"• Запрещено писать: {cant_write}\n"
+        f"• Другие ошибки: {errors}\n"
+        f"• Успешность: {success_rate}%\n\n"
+        f"📋 *Всего получателей: {len(targets)}*",
         parse_mode='Markdown',
         reply_markup=get_main_menu_keyboard()
     )

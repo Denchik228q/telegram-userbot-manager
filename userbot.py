@@ -125,6 +125,37 @@ class UserbotManager:
         except Exception as e:
             logger.error(f"Error checking entity {target}: {e}")
             return False, None
+
+        async def can_send_messages(self, client, target: str):
+        """Проверка: можем ли писать в чат"""
+        try:
+            entity = await client.get_entity(target)
+            
+            # Получаем права в чате
+            permissions = await client.get_permissions(entity)
+            
+            # Проверяем права на отправку сообщений
+            if hasattr(permissions, 'send_messages'):
+                return permissions.send_messages
+            
+            # Если нет атрибута - пробуем определить по типу
+            from telethon.tl.types import Channel
+            if isinstance(entity, Channel):
+                # Если канал - проверяем broadcast
+                if entity.broadcast:
+                    # Это канал, только админы могут писать
+                    return False
+                # Это супергруппа - проверяем права
+                return not entity.default_banned_rights or entity.default_banned_rights.send_messages is False
+            
+            # Для обычных групп и личек - можем писать
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error checking permissions for {target}: {e}")
+            # Если не можем проверить - пытаемся отправить
+            return True
+
     
     async def join_chat(self, session_id: str, phone: str, target: str):
         """Вступление в группу/канал"""
