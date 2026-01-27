@@ -8,8 +8,10 @@
 import os
 import logging
 from telethon import TelegramClient
-from telethon.errors import SessionPasswordNeededError, PhoneCodeInvalidError
+from telethon.errors import SessionPasswordNeededError, PhoneCodeInvalidError, ChannelPrivateError, InviteHashExpiredError
 from telethon.sessions import StringSession
+from telethon.tl.functions.channels import JoinChannelRequest
+from telethon.tl.functions.messages import ImportChatInviteRequest
 from config_userbot import API_ID, API_HASH, SESSIONS_DIR
 
 logger = logging.getLogger(__name__)
@@ -98,6 +100,66 @@ class UserbotManager:
             self.sessions[session_string] = client
             logger.info(f"✅ Session connected: {phone}")
             return {'success': True, 'client': client}
+        except Exception as e:
+            logger.error(f"❌ Error: {e}")
+            return {'success': False, 'error': str(e)}
+    
+    async def join_chat(self, session_id: str, phone: str, target: str):
+        """Вступление в группу/канал"""
+        try:
+            client = self.sessions.get(session_id)
+            if not client or not client.is_connected():
+                connect_result = await self.connect_session(phone, session_id)
+                if not connect_result['success']:
+                    return {'success': False, 'error': 'Session not connected'}
+                client = connect_result['client']
+            
+            # Обработка разных форматов ссылок
+            if target.startswith('https://t.me/'):
+                target = target.replace('https://t.me/', '')
+            if target.startswith('@'):
+                target = target[1:]
+            
+            # Проверка типа ссылки
+            if '+' in target or 'joinchat/' in target:
+                # Приватная ссылка-инвайт
+                invite_hash = target.split('+')[-1] if '+' in target else target.split('joinchat/')[-1]
+                try:
+                    await client(ImportChatInviteRequest(invite_hash))
+                    logger.info(f"✅ Joined via invite: {target}")
+                    return {'success': True, 'joined': True}
+                except InviteHashExpiredError:
+                    logger.error(f"❌ Invite expired: {target}")
+                    return {'success': False, 'error': 'Invite link expired'}
+                except Exception as e:
+                    logger.error(f"❌ Error joining via invite: {e}")
+                    return {'success': False, 'error': str(e)}
+            else:
+                # Публичный канал/группа
+                try:
+                    entity = await client.get_entity(target)
+                    
+                    # Проверяем, состоим ли уже
+                    try:
+                        participant = await client.get_permissions(entity)
+                        if participant:
+                            logger.info(f"✅ Already member: {target}")
+                            return {'success': True, 'joined': False, 'already_member': True}
+                    except:
+                        pass
+                    
+                    # Вступаем
+                    await client(JoinChannelRequest(entity))
+                    logger.info(f"✅ Joined channel: {target}")
+                    return {'success': True, 'joined': True}
+                    
+                except ChannelPrivateError:
+                    logger.error(f"❌ Channel is private: {target}")
+                    return {'success': False, 'error': 'Channel is private'}
+                except Exception as e:
+                    logger.error(f"❌ Error joining: {e}")
+                    return {'success': False, 'error': str(e)}
+                    
         except Exception as e:
             logger.error(f"❌ Error: {e}")
             return {'success': False, 'error': str(e)}

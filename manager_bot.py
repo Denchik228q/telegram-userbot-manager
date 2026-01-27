@@ -784,14 +784,66 @@ async def start_user_mailing(update: Update, context: ContextTypes.DEFAULT_TYPE)
     
     sent = 0
     errors = 0
+    joined = 0
+    already_member = 0
     
     await query.edit_message_text(
         f"📨 *Рассылка запущена!*\n\n"
-        f"Отправлено: 0/{len(targets)}\n"
-        f"⏱️ Задержка: {MAILING_DELAY}s",
+        f"🔄 Проверка подписок...\n"
+        f"Получателей: {len(targets)}",
         parse_mode='Markdown'
     )
     
+    # Фаза 1: Вступление в группы/каналы
+    for idx, target in enumerate(targets, 1):
+        try:
+            # Пытаемся вступить (если это группа/канал)
+            join_result = await userbot_manager.join_chat(
+                session_id=session_id,
+                phone=phone,
+                target=target
+            )
+            
+            if join_result.get('success'):
+                if join_result.get('joined'):
+                    joined += 1
+                    logger.info(f"✅ Joined: {target}")
+                elif join_result.get('already_member'):
+                    already_member += 1
+                    logger.info(f"✅ Already member: {target}")
+            
+            # Обновляем прогресс каждые 5 целей
+            if idx % 5 == 0 or idx == len(targets):
+                try:
+                    await query.edit_message_text(
+                        f"🔄 *Проверка подписок...*\n\n"
+                        f"✅ Вступили: {joined}\n"
+                        f"👥 Уже участник: {already_member}\n"
+                        f"📊 Проверено: {idx}/{len(targets)}",
+                        parse_mode='Markdown'
+                    )
+                except:
+                    pass
+            
+            # Задержка между вступлениями
+            if idx < len(targets):
+                await asyncio.sleep(3)  # 3 секунды между вступлениями
+        
+        except Exception as e:
+            logger.error(f"Error joining {target}: {e}")
+    
+    # Пауза перед рассылкой
+    await asyncio.sleep(5)
+    
+    await query.edit_message_text(
+        f"📨 *Начинаем рассылку!*\n\n"
+        f"✅ Вступили в новых: {joined}\n"
+        f"👥 Уже участник: {already_member}\n\n"
+        f"Отправлено: 0/{len(targets)}",
+        parse_mode='Markdown'
+    )
+    
+    # Фаза 2: Рассылка сообщений
     for idx, target in enumerate(targets, 1):
         try:
             if mailing_message.text:
@@ -866,10 +918,12 @@ async def start_user_mailing(update: Update, context: ContextTypes.DEFAULT_TYPE)
     
     await query.edit_message_text(
         f"✅ *Рассылка завершена!*\n\n"
-        f"📊 Статистика:\n"
-        f"✅ Отправлено: {sent}\n"
+        f"📊 *Статистика:*\n"
+        f"🔗 Вступили в новых: {joined}\n"
+        f"👥 Уже участник: {already_member}\n"
+        f"✅ Отправлено сообщений: {sent}\n"
         f"❌ Ошибок: {errors}\n"
-        f"👥 Всего: {len(targets)}",
+        f"📮 Всего получателей: {len(targets)}",
         parse_mode='Markdown',
         reply_markup=get_main_menu_keyboard()
     )
