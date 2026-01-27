@@ -19,7 +19,7 @@ from telethon.errors import (
 from telethon.sessions import StringSession
 from telethon.tl.functions.channels import JoinChannelRequest
 from telethon.tl.functions.messages import ImportChatInviteRequest
-from telethon.tl.types import Channel, Chat
+from telethon.tl.types import Channel, Chat, User
 from config_userbot import API_ID, API_HASH, SESSIONS_DIR
 
 logger = logging.getLogger(__name__)
@@ -116,20 +116,17 @@ class UserbotManager:
         """Проверка: группа/канал или личный аккаунт"""
         try:
             entity = await client.get_entity(target)
-            # Проверяем тип: Channel (публичный канал/супергруппа) или Chat (обычная группа)
             if isinstance(entity, (Channel, Chat)):
                 return True, entity
             else:
-                # Это личный аккаунт
                 return False, None
         except Exception as e:
             logger.error(f"Error checking entity {target}: {e}")
             return False, None
-
+    
     async def can_send_messages(self, client, target: str):
         """Проверка: можем ли писать в чат"""
         try:
-            # Форматируем таргет
             if target.startswith('https://t.me/'):
                 target = target.replace('https://t.me/', '')
             if target.startswith('http://t.me/'):
@@ -139,25 +136,18 @@ class UserbotManager:
             
             entity = await client.get_entity(target)
             
-            from telethon.tl.types import Channel, Chat, User
-            
-            # Если это личка - можем писать
             if isinstance(entity, User):
                 logger.info(f"✅ {target} is User - can write")
                 return True
             
-            # Если это обычная группа - можем писать
             if isinstance(entity, Chat):
                 logger.info(f"✅ {target} is Chat - can write")
                 return True
             
-            # Если это канал/супергруппа
             if isinstance(entity, Channel):
-                # Получаем права
                 try:
                     permissions = await client.get_permissions(entity)
                     
-                    # Проверяем конкретные права
                     if hasattr(permissions, 'is_banned') and permissions.is_banned:
                         logger.warning(f"❌ {target} - user is BANNED")
                         return False
@@ -167,35 +157,28 @@ class UserbotManager:
                         logger.info(f"{'✅' if can_send else '❌'} {target} - send_messages={can_send}")
                         return can_send
                     
-                    # Если канал broadcast (только админы пишут)
                     if entity.broadcast:
                         logger.warning(f"❌ {target} - is broadcast channel (admins only)")
                         return False
                     
-                    # Проверяем default_banned_rights
                     if entity.default_banned_rights:
                         can_send = not entity.default_banned_rights.send_messages
                         logger.info(f"{'✅' if can_send else '❌'} {target} - default rights: {can_send}")
                         return can_send
                     
-                    # Если нет явных запретов - можем писать
                     logger.info(f"✅ {target} - no restrictions")
                     return True
                     
                 except Exception as perm_err:
                     logger.error(f"⚠️ Can't check permissions for {target}: {perm_err}")
-                    # Если не можем проверить - лучше попробовать отправить
                     return True
             
-            # Неизвестный тип - пробуем писать
             logger.warning(f"⚠️ {target} - unknown type: {entity.__class__.__name__}")
             return True
             
         except Exception as e:
             logger.error(f"❌ Error checking {target}: {e}")
-            # При ошибке проверки - пробуем отправить
             return True
-
     
     async def join_chat(self, session_id: str, phone: str, target: str):
         """Вступление в группу/канал"""
@@ -207,7 +190,6 @@ class UserbotManager:
                     return {'success': False, 'error': 'Session not connected'}
                 client = connect_result['client']
             
-            # Обработка разных форматов ссылок
             original_target = target
             if target.startswith('https://t.me/'):
                 target = target.replace('https://t.me/', '')
@@ -216,9 +198,7 @@ class UserbotManager:
             if target.startswith('@'):
                 target = target[1:]
             
-            # Проверка типа ссылки
             if '+' in target or 'joinchat/' in target:
-                # Приватная ссылка-инвайт
                 invite_hash = target.split('+')[-1] if '+' in target else target.split('joinchat/')[-1]
                 try:
                     await client(ImportChatInviteRequest(invite_hash))
@@ -237,17 +217,13 @@ class UserbotManager:
                     logger.error(f"❌ Error joining via invite: {e}")
                     return {'success': False, 'error': str(e), 'skippable': True}
             else:
-                # Публичный канал/группа или личный аккаунт
                 try:
-                    # Проверяем тип
                     is_group, entity = await self.is_group_or_channel(client, target)
                     
                     if not is_group:
-                        # Это личный аккаунт - пропускаем вступление
                         logger.info(f"⏭️ Skipping user account: {original_target}")
                         return {'success': True, 'joined': False, 'is_user': True}
                     
-                    # Это группа/канал - проверяем участие
                     try:
                         participant = await client.get_permissions(entity)
                         if participant:
@@ -256,7 +232,6 @@ class UserbotManager:
                     except:
                         pass
                     
-                    # Вступаем
                     await client(JoinChannelRequest(entity))
                     logger.info(f"✅ Joined channel: {original_target}")
                     return {'success': True, 'joined': True, 'type': 'public'}
@@ -275,7 +250,7 @@ class UserbotManager:
             logger.error(f"❌ Error: {e}")
             return {'success': False, 'error': str(e), 'skippable': True}
     
-async def send_message(self, session_id: str, phone: str, target: str, message: str):
+    async def send_message(self, session_id: str, phone: str, target: str, message: str):
         """Отправка сообщения"""
         try:
             client = self.sessions.get(session_id)
@@ -285,7 +260,6 @@ async def send_message(self, session_id: str, phone: str, target: str, message: 
                     return {'success': False, 'error': 'Session not connected'}
                 client = connect_result['client']
             
-            # Форматирование таргета
             original_target = target
             if target.startswith('https://t.me/'):
                 target = target.replace('https://t.me/', '')
@@ -297,18 +271,15 @@ async def send_message(self, session_id: str, phone: str, target: str, message: 
             logger.info(f"🔄 Attempting to send to: {target}")
             
             try:
-                # Получаем entity
                 entity = await client.get_entity(target)
                 logger.info(f"✅ Entity found: {entity.__class__.__name__} - {getattr(entity, 'title', target)}")
                 
-                # Проверяем права ЕЩЁ РАЗ перед отправкой
                 try:
                     permissions = await client.get_permissions(entity)
                     logger.info(f"📋 Permissions: send_messages={getattr(permissions, 'send_messages', 'unknown')}")
                 except Exception as perm_err:
                     logger.warning(f"⚠️ Can't get permissions: {perm_err}")
                 
-                # Пытаемся отправить
                 await client.send_message(entity, message)
                 logger.info(f"✅ Message sent to {target}")
                 return {'success': True}
@@ -317,7 +288,6 @@ async def send_message(self, session_id: str, phone: str, target: str, message: 
                 error_msg = str(send_err)
                 logger.error(f"❌ Send error for {target}: {error_msg}")
                 
-                # Детальная информация об ошибке
                 if "can't write" in error_msg.lower():
                     logger.error(f"❌ WRITE FORBIDDEN in {target}")
                 elif "flood" in error_msg.lower():
