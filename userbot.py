@@ -126,7 +126,7 @@ class UserbotManager:
             logger.error(f"Error checking entity {target}: {e}")
             return False, None
 
-            async def can_send_messages(self, client, target: str):
+    async def can_send_messages(self, client, target: str):
         """Проверка: можем ли писать в чат"""
         try:
             # Форматируем таргет
