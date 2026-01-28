@@ -1967,18 +1967,18 @@ def main():
     
     # Аккаунты
     application.add_handler(CallbackQueryHandler(accounts_menu, pattern='^accounts_menu$'))
-    application.add_handler(CallbackQueryHandler(account_detail, pattern='^account_\d+$'))
-    application.add_handler(CallbackQueryHandler(delete_account_confirm, pattern='^delete_account_\d+$'))
-    application.add_handler(CallbackQueryHandler(confirm_delete_account, pattern='^confirm_delete_\d+$'))
+    application.add_handler(CallbackQueryHandler(account_detail, pattern=r'^account_\d+$'))
+    application.add_handler(CallbackQueryHandler(delete_account_confirm, pattern=r'^delete_account_\d+$'))
+    application.add_handler(CallbackQueryHandler(confirm_delete_account, pattern=r'^confirm_delete_\d+$'))
     
     # Планировщик
     application.add_handler(CallbackQueryHandler(schedule_mailing_menu, pattern='^schedule_menu$'))
     application.add_handler(CallbackQueryHandler(my_schedules, pattern='^my_schedules$'))
-    application.add_handler(CallbackQueryHandler(schedule_detail, pattern='^schedule_detail_\d+$'))
-    application.add_handler(CallbackQueryHandler(delete_schedule, pattern='^delete_schedule_\d+$'))
+    application.add_handler(CallbackQueryHandler(schedule_detail, pattern=r'^schedule_detail_\d+$'))
+    application.add_handler(CallbackQueryHandler(delete_schedule, pattern=r'^delete_schedule_\d+$'))
     
     # Выбор аккаунтов
-    application.add_handler(CallbackQueryHandler(toggle_account_selection, pattern='^toggle_account_\d+$'))
+    application.add_handler(CallbackQueryHandler(toggle_account_selection, pattern=r'^toggle_account_\d+$'))
     application.add_handler(CallbackQueryHandler(select_all_accounts, pattern='^select_all_accounts$'))
     application.add_handler(CallbackQueryHandler(deselect_all_accounts, pattern='^deselect_all_accounts$'))
     application.add_handler(CallbackQueryHandler(continue_with_selected, pattern='^continue_with_selected$'))
@@ -1995,8 +1995,8 @@ def main():
     application.add_handler(CallbackQueryHandler(admin_payments, pattern='^admin_payments$'))
     application.add_handler(CallbackQueryHandler(admin_backup, pattern='^admin_backup$'))
     application.add_handler(CallbackQueryHandler(admin_menu_callback, pattern='^admin_menu$'))
-    application.add_handler(CallbackQueryHandler(approve_payment, pattern='^approve_payment_\d+$'))
-    application.add_handler(CallbackQueryHandler(reject_payment, pattern='^reject_payment_\d+$'))
+    application.add_handler(CallbackQueryHandler(approve_payment, pattern=r'^approve_payment_\d+$'))
+    application.add_handler(CallbackQueryHandler(reject_payment, pattern=r'^reject_payment_\d+$'))
     
     # Запуск
     logger.info("🤖 Bot starting...")
