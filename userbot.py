@@ -232,6 +232,11 @@ class UserbotManager:
                     logger.info(f"🔄 Attempting ImportChatInviteRequest({invite_hash})")
                     result = await client(ImportChatInviteRequest(invite_hash))
                     logger.info(f"✅ ImportChatInviteRequest SUCCESS: {result}")
+                    
+                    # ВАЖНО: Задержка для обновления прав
+                    logger.info(f"⏳ Waiting 3s for permissions to update...")
+                    await asyncio.sleep(3)
+                    
                     logger.info(f"✅ JOINED via invite: {original_target}")
                     return {'success': True, 'joined': True, 'type': 'invite'}
                     
@@ -296,13 +301,17 @@ class UserbotManager:
                     await client(JoinChannelRequest(entity))
                     logger.info(f"✅ JoinChannelRequest SUCCESS")
                     
+                    # ВАЖНО: Задержка для обновления прав
+                    logger.info(f"⏳ Waiting 3s for permissions to update...")
+                    await asyncio.sleep(3)
+                    
                     # Проверяем что вступили
-                    await asyncio.sleep(1)
                     try:
                         permissions_after = await client.get_permissions(entity)
                         logger.info(f"✅ Permissions after join: {permissions_after}")
-                    except:
-                        pass
+                        logger.info(f"✅ send_messages: {getattr(permissions_after, 'send_messages', 'N/A')}")
+                    except Exception as check_err:
+                        logger.warning(f"⚠️ Could not verify permissions: {check_err}")
                     
                     logger.info(f"✅ JOINED channel: {original_target}")
                     return {'success': True, 'joined': True, 'type': 'public'}
@@ -380,26 +389,8 @@ class UserbotManager:
                 entity = await client.get_entity(target_clean)
                 logger.info(f"✅ Entity: {entity.__class__.__name__} (ID: {entity.id})")
                 
-                # Проверяем permissions
-                try:
-                    logger.info(f"🔄 Checking permissions...")
-                    permissions = await client.get_permissions(entity)
-                    logger.info(f"📋 Permissions object: {permissions}")
-                    logger.info(f"📋 send_messages: {getattr(permissions, 'send_messages', 'N/A')}")
-                    logger.info(f"📋 is_banned: {getattr(permissions, 'is_banned', 'N/A')}")
-                    
-                    # Если забанены
-                    if hasattr(permissions, 'is_banned') and permissions.is_banned:
-                        logger.error(f"❌ USER IS BANNED in this chat")
-                        return {'success': False, 'error': 'User is banned'}
-                    
-                    # Если нет прав
-                    if hasattr(permissions, 'send_messages') and not permissions.send_messages:
-                        logger.error(f"❌ NO PERMISSION to send messages")
-                        return {'success': False, 'error': 'No permission to send messages'}
-                    
-                except Exception as perm_err:
-                    logger.warning(f"⚠️ Could not check permissions: {perm_err}")
+                # НЕ ПРОВЕРЯЕМ permissions заранее - просто пытаемся отправить
+                # Telegram сам вернёт ошибку если нельзя
                 
                 # Отправляем сообщение
                 logger.info(f"🔄 Sending message...")
@@ -411,12 +402,17 @@ class UserbotManager:
                 error_msg = str(send_err)
                 logger.error(f"❌ SEND ERROR: {type(send_err).__name__}: {error_msg}")
                 
-                if "can't write" in error_msg.lower():
-                    logger.error(f"❌ REASON: Write forbidden")
+                # Логируем причину
+                if "can't write" in error_msg.lower() or "write access" in error_msg.lower():
+                    logger.error(f"❌ REASON: No write permission")
                 elif "flood" in error_msg.lower():
                     logger.error(f"❌ REASON: Flood wait")
                 elif "banned" in error_msg.lower():
                     logger.error(f"❌ REASON: User banned")
+                elif "not in the chat" in error_msg.lower():
+                    logger.error(f"❌ REASON: Not a member")
+                else:
+                    logger.error(f"❌ REASON: {error_msg}")
                 
                 return {'success': False, 'error': error_msg}
                 
@@ -468,7 +464,7 @@ class UserbotManager:
                 
             except Exception as send_err:
                 logger.error(f"❌ Send photo error for {target_clean}: {send_err}")
-                return {'success': False, 'error': str(send_err)}
+                                return {'success': False, 'error': str(send_err)}
                 
         except Exception as e:
             logger.error(f"❌ Fatal error: {e}")
