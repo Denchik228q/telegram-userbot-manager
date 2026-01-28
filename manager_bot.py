@@ -623,9 +623,9 @@ async def test_message_received(update: Update, context: ContextTypes.DEFAULT_TY
     session_id = user_data['session_id']
     phone = user_data['phone_number']
     
-    await update.message.reply_text("🔄 Тестирую отправку...")
+    await update.message.reply_text("🔄 *Тестирую...*", parse_mode='Markdown')
     
-    # Подключаем клиент
+    # Подключение
     connect_result = await userbot_manager.connect_session(phone, session_id)
     if not connect_result['success']:
         await update.message.reply_text("❌ Не удалось подключиться")
@@ -633,17 +633,62 @@ async def test_message_received(update: Update, context: ContextTypes.DEFAULT_TY
     
     client = connect_result['client']
     
-    # Проверяем права
-    can_write = await userbot_manager.can_send_messages(client, target)
+    # ШАГ 1: Вступление
+    await update.message.reply_text(f"🔄 *Шаг 1: Вступление...*", parse_mode='Markdown')
     
-    await update.message.reply_text(
-        f"📋 *Проверка прав:*\n"
-        f"Цель: `{target}`\n"
-        f"Можно писать: {'✅ Да' if can_write else '❌ Нет'}",
-        parse_mode='Markdown'
+    join_result = await userbot_manager.join_chat(
+        session_id=session_id,
+        phone=phone,
+        target=target
     )
     
-    # Пробуем отправить
+    if join_result.get('success'):
+        if join_result.get('joined'):
+            join_status = "✅ Вступили"
+        elif join_result.get('already_member'):
+            join_status = "✅ Уже участник"
+        elif join_result.get('is_user'):
+            join_status = "👤 Личка"
+        else:
+            join_status = "✅ OK"
+    else:
+        join_status = f"❌ {join_result.get('error', 'unknown')}"
+    
+    await update.message.reply_text(f"*Результат вступления:*\n{join_status}", parse_mode='Markdown')
+    
+    # ПАУЗА после вступления
+    await asyncio.sleep(3)
+    
+    # ШАГ 2: ПОВТОРНАЯ проверка участия
+    await update.message.reply_text(f"🔄 *Шаг 2: Проверка участия...*", parse_mode='Markdown')
+    
+    try:
+        target_clean = target
+        if target_clean.startswith('https://t.me/'):
+            target_clean = target_clean.replace('https://t.me/', '')
+        if target_clean.startswith('@'):
+            target_clean = target_clean[1:]
+        
+        entity = await client.get_entity(target_clean)
+        permissions = await client.get_permissions(entity)
+        
+        member_status = f"✅ Участник (ID: {entity.id})"
+        await update.message.reply_text(
+            f"*Проверка участия:*\n{member_status}\n\n"
+            f"Права:\n"
+            f"• send_messages: {getattr(permissions, 'send_messages', 'N/A')}\n"
+            f"• is_banned: {getattr(permissions, 'is_banned', 'N/A')}",
+            parse_mode='Markdown'
+        )
+    except Exception as check_err:
+        await update.message.reply_text(f"⚠️ Не удалось проверить: {check_err}")
+    
+    # ПАУЗА
+    await asyncio.sleep(2)
+    
+    # ШАГ 3: Отправка
+    await update.message.reply_text(f"🔄 *Шаг 3: Отправка...*", parse_mode='Markdown')
+    
     result = await userbot_manager.send_message(
         session_id=session_id,
         phone=phone,
@@ -653,16 +698,16 @@ async def test_message_received(update: Update, context: ContextTypes.DEFAULT_TY
     
     if result['success']:
         await update.message.reply_text(
-            f"✅ *Сообщение отправлено!*\n\n"
-            f"Цель: `{target}`\n"
-            f"Текст: {message}",
+            f"✅ *УСПЕХ!*\n\n"
+            f"Сообщение отправлено в:\n`{target}`",
             parse_mode='Markdown'
         )
     else:
         await update.message.reply_text(
-            f"❌ *Ошибка отправки!*\n\n"
+            f"❌ *ОШИБКА!*\n\n"
             f"Цель: `{target}`\n"
-            f"Ошибка: `{result.get('error')}`",
+            f"Ошибка: `{result.get('error')}`\n\n"
+            f"Смотри логи Railway для деталей!",
             parse_mode='Markdown'
         )
     

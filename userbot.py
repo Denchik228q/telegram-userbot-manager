@@ -124,184 +124,335 @@ class UserbotManager:
             logger.error(f"Error checking entity {target}: {e}")
             return False, None
     
-    async def can_send_messages(self, client, target: str):
-        """Проверка: можем ли писать в чат"""
+    async def send_message(self, session_id: str, phone: str, target: str, message: str):
+    """Отправка сообщения"""
+    try:
+        logger.info(f"=" * 60)
+        logger.info(f"📨 SEND_MESSAGE STARTED")
+        logger.info(f"🎯 Target: {target}")
+        logger.info(f"=" * 60)
+        
+        client = self.sessions.get(session_id)
+        if not client or not client.is_connected():
+            logger.warning("⚠️ Client not connected, reconnecting...")
+            connect_result = await self.connect_session(phone, session_id)
+            if not connect_result['success']:
+                return {'success': False, 'error': 'Session not connected'}
+            client = connect_result['client']
+        
+        # Пропускаем инвайт-ссылки
+        if 't.me/+' in target or 't.me/joinchat/' in target:
+            logger.warning(f"⚠️ Cannot send to invite link")
+            return {'success': False, 'error': 'Cannot send to invite links'}
+        
+        # Очистка
+        target_clean = target
+        if target_clean.startswith('https://t.me/'):
+            target_clean = target_clean.replace('https://t.me/', '')
+        if target_clean.startswith('http://t.me/'):
+            target_clean = target_clean.replace('http://t.me/', '')
+        if target_clean.startswith('@'):
+            target_clean = target_clean[1:]
+        if '?' in target_clean:
+            target_clean = target_clean.split('?')[0]
+        
+        logger.info(f"🔄 Cleaned target: {target_clean}")
+        
         try:
-            if target.startswith('https://t.me/'):
-                target = target.replace('https://t.me/', '')
-            if target.startswith('http://t.me/'):
-                target = target.replace('http://t.me/', '')
-            if target.startswith('@'):
-                target = target[1:]
+            # Получаем entity
+            logger.info(f"🔄 Getting entity...")
+            entity = await client.get_entity(target_clean)
+            logger.info(f"✅ Entity: {entity.__class__.__name__} (ID: {entity.id})")
             
-            entity = await client.get_entity(target)
+            # Проверяем permissions
+            try:
+                logger.info(f"🔄 Checking permissions...")
+                permissions = await client.get_permissions(entity)
+                logger.info(f"📋 Permissions object: {permissions}")
+                logger.info(f"📋 send_messages: {getattr(permissions, 'send_messages', 'N/A')}")
+                logger.info(f"📋 is_banned: {getattr(permissions, 'is_banned', 'N/A')}")
+                
+                # Если забанены
+                if hasattr(permissions, 'is_banned') and permissions.is_banned:
+                    logger.error(f"❌ USER IS BANNED in this chat")
+                    return {'success': False, 'error': 'User is banned'}
+                
+                # Если нет прав
+                if hasattr(permissions, 'send_messages') and not permissions.send_messages:
+                    logger.error(f"❌ NO PERMISSION to send messages")
+                    return {'success': False, 'error': 'No permission to send messages'}
+                
+            except Exception as perm_err:
+                logger.warning(f"⚠️ Could not check permissions: {perm_err}")
             
-            if isinstance(entity, User):
-                logger.info(f"✅ {target} is User - can write")
-                return True
+            # Отправляем сообщение
+            logger.info(f"🔄 Sending message...")
+            await client.send_message(entity, message)
+            logger.info(f"✅ MESSAGE SENT successfully")
+            return {'success': True}
             
-            if isinstance(entity, Chat):
-                logger.info(f"✅ {target} is Chat - can write")
-                return True
+        except Exception as send_err:
+            error_msg = str(send_err)
+            logger.error(f"❌ SEND ERROR: {type(send_err).__name__}: {error_msg}")
             
-            if isinstance(entity, Channel):
-                try:
-                    permissions = await client.get_permissions(entity)
-                    
-                    if hasattr(permissions, 'is_banned') and permissions.is_banned:
-                        logger.warning(f"❌ {target} - user is BANNED")
-                        return False
-                    
-                    if hasattr(permissions, 'send_messages'):
-                        can_send = permissions.send_messages
-                        logger.info(f"{'✅' if can_send else '❌'} {target} - send_messages={can_send}")
-                        return can_send
-                    
-                    if entity.broadcast:
-                        logger.warning(f"❌ {target} - is broadcast channel (admins only)")
-                        return False
-                    
-                    if entity.default_banned_rights:
-                        can_send = not entity.default_banned_rights.send_messages
-                        logger.info(f"{'✅' if can_send else '❌'} {target} - default rights: {can_send}")
-                        return can_send
-                    
-                    logger.info(f"✅ {target} - no restrictions")
-                    return True
-                    
-                except Exception as perm_err:
-                    logger.error(f"⚠️ Can't check permissions for {target}: {perm_err}")
-                    return True
+            if "can't write" in error_msg.lower():
+                logger.error(f"❌ REASON: Write forbidden")
+            elif "flood" in error_msg.lower():
+                logger.error(f"❌ REASON: Flood wait")
+            elif "banned" in error_msg.lower():
+                logger.error(f"❌ REASON: User banned")
             
-            logger.warning(f"⚠️ {target} - unknown type: {entity.__class__.__name__}")
-            return True
+            return {'success': False, 'error': error_msg}
             
-        except Exception as e:
-            logger.error(f"❌ Error checking {target}: {e}")
-            return True
+    except Exception as e:
+        logger.error(f"❌ FATAL ERROR: {type(e).__name__}: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return {'success': False, 'error': str(e)}
+    
+    finally:
+        logger.info(f"=" * 60)
+        logger.info(f"🏁 SEND_MESSAGE FINISHED")
+        logger.info(f"=" * 60)
     
     async def join_chat(self, session_id: str, phone: str, target: str):
-        """Вступление в группу/канал"""
-        try:
-            client = self.sessions.get(session_id)
-            if not client or not client.is_connected():
-                connect_result = await self.connect_session(phone, session_id)
-                if not connect_result['success']:
-                    return {'success': False, 'error': 'Session not connected'}
-                client = connect_result['client']
+    """Вступление в группу/канал"""
+    try:
+        logger.info(f"=" * 60)
+        logger.info(f"🔄 JOIN_CHAT STARTED")
+        logger.info(f"📱 Phone: {phone}")
+        logger.info(f"🎯 Target: {target}")
+        logger.info(f"=" * 60)
+        
+        # Получаем клиент
+        client = self.sessions.get(session_id)
+        if not client or not client.is_connected():
+            logger.warning("⚠️ Client not connected, reconnecting...")
+            connect_result = await self.connect_session(phone, session_id)
+            if not connect_result['success']:
+                logger.error("❌ Failed to connect session")
+                return {'success': False, 'error': 'Session not connected'}
+            client = connect_result['client']
+            logger.info("✅ Client reconnected")
+        
+        original_target = target
+        
+        # Проверка на приватную ссылку
+        is_invite_link = False
+        invite_hash = None
+        
+        if 't.me/+' in target or 't.me/joinchat/' in target:
+            is_invite_link = True
+            if 't.me/+' in target:
+                invite_hash = target.split('t.me/+')[1].split('?')[0].split('/')[0]
+            elif 't.me/joinchat/' in target:
+                invite_hash = target.split('t.me/joinchat/')[1].split('?')[0].split('/')[0]
+            logger.info(f"🔗 INVITE LINK detected: {invite_hash}")
+        
+        # Вступление через инвайт-ссылку
+        if is_invite_link and invite_hash:
+            try:
+                logger.info(f"🔄 Attempting ImportChatInviteRequest({invite_hash})")
+                result = await client(ImportChatInviteRequest(invite_hash))
+                logger.info(f"✅ ImportChatInviteRequest SUCCESS: {result}")
+                logger.info(f"✅ JOINED via invite: {original_target}")
+                return {'success': True, 'joined': True, 'type': 'invite'}
+                
+            except UserAlreadyParticipantError as e:
+                logger.info(f"✅ Already member (invite): {original_target}")
+                return {'success': True, 'joined': False, 'already_member': True}
+                
+            except InviteHashExpiredError as e:
+                logger.error(f"❌ Invite expired: {e}")
+                return {'success': False, 'error': 'Invite expired', 'skippable': True}
+                
+            except FloodWaitError as e:
+                logger.error(f"❌ Flood wait {e.seconds}s: {e}")
+                return {'success': False, 'error': f'Flood wait {e.seconds}s', 'skippable': True}
+                
+            except Exception as e:
+                logger.error(f"❌ ImportChatInviteRequest ERROR: {type(e).__name__}: {e}")
+                return {'success': False, 'error': str(e), 'skippable': True}
+        
+        # Вступление через публичную ссылку/username
+        else:
+            # Очистка таргета
+            target_clean = target
+            if target_clean.startswith('https://t.me/'):
+                target_clean = target_clean.replace('https://t.me/', '')
+            if target_clean.startswith('http://t.me/'):
+                target_clean = target_clean.replace('http://t.me/', '')
+            if target_clean.startswith('@'):
+                target_clean = target_clean[1:]
+            if '?' in target_clean:
+                target_clean = target_clean.split('?')[0]
             
-            original_target = target
-            if target.startswith('https://t.me/'):
-                target = target.replace('https://t.me/', '')
-            if target.startswith('http://t.me/'):
-                target = target.replace('http://t.me/', '')
-            if target.startswith('@'):
-                target = target[1:]
-            
-            if '+' in target or 'joinchat/' in target:
-                invite_hash = target.split('+')[-1] if '+' in target else target.split('joinchat/')[-1]
-                try:
-                    await client(ImportChatInviteRequest(invite_hash))
-                    logger.info(f"✅ Joined via invite: {original_target}")
-                    return {'success': True, 'joined': True, 'type': 'invite'}
-                except UserAlreadyParticipantError:
-                    logger.info(f"✅ Already member (invite): {original_target}")
-                    return {'success': True, 'joined': False, 'already_member': True}
-                except InviteHashExpiredError:
-                    logger.error(f"❌ Invite expired: {original_target}")
-                    return {'success': False, 'error': 'Invite expired', 'skippable': True}
-                except FloodWaitError as e:
-                    logger.error(f"❌ Flood wait {e.seconds}s: {original_target}")
-                    return {'success': False, 'error': f'Flood wait {e.seconds}s', 'skippable': True}
-                except Exception as e:
-                    logger.error(f"❌ Error joining via invite: {e}")
-                    return {'success': False, 'error': str(e), 'skippable': True}
-            else:
-                try:
-                    is_group, entity = await self.is_group_or_channel(client, target)
-                    
-                    if not is_group:
-                        logger.info(f"⏭️ Skipping user account: {original_target}")
-                        return {'success': True, 'joined': False, 'is_user': True}
-                    
-                    try:
-                        participant = await client.get_permissions(entity)
-                        if participant:
-                            logger.info(f"✅ Already member: {original_target}")
-                            return {'success': True, 'joined': False, 'already_member': True}
-                    except:
-                        pass
-                    
-                    await client(JoinChannelRequest(entity))
-                    logger.info(f"✅ Joined channel: {original_target}")
-                    return {'success': True, 'joined': True, 'type': 'public'}
-                    
-                except ChannelPrivateError:
-                    logger.error(f"❌ Channel is private: {original_target}")
-                    return {'success': False, 'error': 'Channel is private', 'skippable': True}
-                except FloodWaitError as e:
-                    logger.error(f"❌ Flood wait {e.seconds}s: {original_target}")
-                    return {'success': False, 'error': f'Flood wait {e.seconds}s', 'skippable': True}
-                except Exception as e:
-                    logger.error(f"❌ Error joining: {e}")
-                    return {'success': False, 'error': str(e), 'skippable': True}
-                    
-        except Exception as e:
-            logger.error(f"❌ Error: {e}")
-            return {'success': False, 'error': str(e), 'skippable': True}
-    
-    async def send_message(self, session_id: str, phone: str, target: str, message: str):
-        """Отправка сообщения"""
-        try:
-            client = self.sessions.get(session_id)
-            if not client or not client.is_connected():
-                connect_result = await self.connect_session(phone, session_id)
-                if not connect_result['success']:
-                    return {'success': False, 'error': 'Session not connected'}
-                client = connect_result['client']
-            
-            original_target = target
-            if target.startswith('https://t.me/'):
-                target = target.replace('https://t.me/', '')
-            if target.startswith('http://t.me/'):
-                target = target.replace('http://t.me/', '')
-            if target.startswith('@'):
-                target = target[1:]
-            
-            logger.info(f"🔄 Attempting to send to: {target}")
+            logger.info(f"🔄 PUBLIC LINK/USERNAME: {target_clean}")
             
             try:
-                entity = await client.get_entity(target)
-                logger.info(f"✅ Entity found: {entity.__class__.__name__} - {getattr(entity, 'title', target)}")
+                # Получаем entity
+                logger.info(f"🔄 Attempting client.get_entity({target_clean})")
+                entity = await client.get_entity(target_clean)
+                logger.info(f"✅ Entity found: {entity.__class__.__name__}")
+                logger.info(f"📋 Entity ID: {entity.id}")
+                logger.info(f"📋 Entity title: {getattr(entity, 'title', 'N/A')}")
                 
+                # Проверяем тип
+                if isinstance(entity, User):
+                    logger.info(f"👤 ENTITY IS USER - skipping join")
+                    return {'success': True, 'joined': False, 'is_user': True}
+                
+                # Проверяем участие
+                logger.info(f"🔄 Checking if already member...")
                 try:
                     permissions = await client.get_permissions(entity)
-                    logger.info(f"📋 Permissions: send_messages={getattr(permissions, 'send_messages', 'unknown')}")
+                    logger.info(f"📋 Permissions retrieved: {permissions}")
+                    
+                    if permissions and hasattr(permissions, 'is_admin'):
+                        logger.info(f"✅ Already member (has permissions)")
+                        return {'success': True, 'joined': False, 'already_member': True}
                 except Exception as perm_err:
-                    logger.warning(f"⚠️ Can't get permissions: {perm_err}")
+                    logger.warning(f"⚠️ Could not check permissions: {perm_err}")
                 
-                await client.send_message(entity, message)
-                logger.info(f"✅ Message sent to {target}")
-                return {'success': True}
+                # Пытаемся вступить
+                logger.info(f"🔄 Attempting JoinChannelRequest")
+                await client(JoinChannelRequest(entity))
+                logger.info(f"✅ JoinChannelRequest SUCCESS")
                 
-            except Exception as send_err:
-                error_msg = str(send_err)
-                logger.error(f"❌ Send error for {target}: {error_msg}")
+                # Проверяем что вступили
+                await asyncio.sleep(1)
+                try:
+                    permissions_after = await client.get_permissions(entity)
+                    logger.info(f"✅ Permissions after join: {permissions_after}")
+                except:
+                    pass
                 
-                if "can't write" in error_msg.lower():
-                    logger.error(f"❌ WRITE FORBIDDEN in {target}")
-                elif "flood" in error_msg.lower():
-                    logger.error(f"❌ FLOOD WAIT in {target}")
-                elif "banned" in error_msg.lower():
-                    logger.error(f"❌ BANNED in {target}")
-                else:
-                    logger.error(f"❌ UNKNOWN ERROR in {target}: {error_msg}")
+                logger.info(f"✅ JOINED channel: {original_target}")
+                return {'success': True, 'joined': True, 'type': 'public'}
                 
-                return {'success': False, 'error': error_msg}
+            except UserAlreadyParticipantError as e:
+                logger.info(f"✅ UserAlreadyParticipantError - already member")
+                return {'success': True, 'joined': False, 'already_member': True}
                 
-        except Exception as e:
-            logger.error(f"❌ Fatal error: {e}")
-            return {'success': False, 'error': str(e)}
+            except ChannelPrivateError as e:
+                logger.error(f"❌ ChannelPrivateError: {e}")
+                return {'success': False, 'error': 'Channel is private', 'skippable': True}
+                
+            except FloodWaitError as e:
+                logger.error(f"❌ FloodWaitError: {e.seconds}s")
+                return {'success': False, 'error': f'Flood wait {e.seconds}s', 'skippable': True}
+                
+            except Exception as e:
+                error_msg = str(e)
+                logger.error(f"❌ ERROR: {type(e).__name__}: {error_msg}")
+                
+                if 'username' in error_msg.lower() and 'unacceptable' in error_msg.lower():
+                    logger.error(f"⚠️ Invalid username format")
+                    return {'success': False, 'error': 'Invalid link format', 'skippable': True}
+                
+                return {'success': False, 'error': error_msg, 'skippable': True}
+                
+    except Exception as e:
+        logger.error(f"❌ FATAL ERROR in join_chat: {type(e).__name__}: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return {'success': False, 'error': str(e), 'skippable': True}
+    
+    finally:
+        logger.info(f"=" * 60)
+        logger.info(f"🏁 JOIN_CHAT FINISHED")
+        logger.info(f"=" * 60)
+    
+    async def send_message(self, session_id: str, phone: str, target: str, message: str):
+    """Отправка сообщения"""
+    try:
+        logger.info(f"=" * 60)
+        logger.info(f"📨 SEND_MESSAGE STARTED")
+        logger.info(f"🎯 Target: {target}")
+        logger.info(f"=" * 60)
+        
+        client = self.sessions.get(session_id)
+        if not client or not client.is_connected():
+            logger.warning("⚠️ Client not connected, reconnecting...")
+            connect_result = await self.connect_session(phone, session_id)
+            if not connect_result['success']:
+                return {'success': False, 'error': 'Session not connected'}
+            client = connect_result['client']
+        
+        # Пропускаем инвайт-ссылки
+        if 't.me/+' in target or 't.me/joinchat/' in target:
+            logger.warning(f"⚠️ Cannot send to invite link")
+            return {'success': False, 'error': 'Cannot send to invite links'}
+        
+        # Очистка
+        target_clean = target
+        if target_clean.startswith('https://t.me/'):
+            target_clean = target_clean.replace('https://t.me/', '')
+        if target_clean.startswith('http://t.me/'):
+            target_clean = target_clean.replace('http://t.me/', '')
+        if target_clean.startswith('@'):
+            target_clean = target_clean[1:]
+        if '?' in target_clean:
+            target_clean = target_clean.split('?')[0]
+        
+        logger.info(f"🔄 Cleaned target: {target_clean}")
+        
+        try:
+            # Получаем entity
+            logger.info(f"🔄 Getting entity...")
+            entity = await client.get_entity(target_clean)
+            logger.info(f"✅ Entity: {entity.__class__.__name__} (ID: {entity.id})")
+            
+            # Проверяем permissions
+            try:
+                logger.info(f"🔄 Checking permissions...")
+                permissions = await client.get_permissions(entity)
+                logger.info(f"📋 Permissions object: {permissions}")
+                logger.info(f"📋 send_messages: {getattr(permissions, 'send_messages', 'N/A')}")
+                logger.info(f"📋 is_banned: {getattr(permissions, 'is_banned', 'N/A')}")
+                
+                # Если забанены
+                if hasattr(permissions, 'is_banned') and permissions.is_banned:
+                    logger.error(f"❌ USER IS BANNED in this chat")
+                    return {'success': False, 'error': 'User is banned'}
+                
+                # Если нет прав
+                if hasattr(permissions, 'send_messages') and not permissions.send_messages:
+                    logger.error(f"❌ NO PERMISSION to send messages")
+                    return {'success': False, 'error': 'No permission to send messages'}
+                
+            except Exception as perm_err:
+                logger.warning(f"⚠️ Could not check permissions: {perm_err}")
+            
+            # Отправляем сообщение
+            logger.info(f"🔄 Sending message...")
+            await client.send_message(entity, message)
+            logger.info(f"✅ MESSAGE SENT successfully")
+            return {'success': True}
+            
+        except Exception as send_err:
+            error_msg = str(send_err)
+            logger.error(f"❌ SEND ERROR: {type(send_err).__name__}: {error_msg}")
+            
+            if "can't write" in error_msg.lower():
+                logger.error(f"❌ REASON: Write forbidden")
+            elif "flood" in error_msg.lower():
+                logger.error(f"❌ REASON: Flood wait")
+            elif "banned" in error_msg.lower():
+                logger.error(f"❌ REASON: User banned")
+            
+            return {'success': False, 'error': error_msg}
+            
+    except Exception as e:
+        logger.error(f"❌ FATAL ERROR: {type(e).__name__}: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return {'success': False, 'error': str(e)}
+    
+    finally:
+        logger.info(f"=" * 60)
+        logger.info(f"🏁 SEND_MESSAGE FINISHED")
+        logger.info(f"=" * 60)
     
     async def send_photo(self, session_id: str, phone: str, target: str, photo_path: str, caption: str = ""):
         """Отправка фото"""
