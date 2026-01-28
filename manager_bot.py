@@ -1038,7 +1038,7 @@ async def select_all_accounts(update: Update, context: ContextTypes.DEFAULT_TYPE
     query = update.callback_query
     await query.answer()
     
-        user_id = update.effective_user.id
+    user_id = update.effective_user.id
     accounts = db.get_user_accounts(user_id)
     context.user_data['selected_accounts'] = [acc['id'] for acc in accounts]
     
