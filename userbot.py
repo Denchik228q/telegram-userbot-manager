@@ -464,7 +464,7 @@ class UserbotManager:
                 
             except Exception as send_err:
                 logger.error(f"❌ Send photo error for {target_clean}: {send_err}")
-                                return {'success': False, 'error': str(send_err)}
+                return {'success': False, 'error': str(send_err)}
                 
         except Exception as e:
             logger.error(f"❌ Fatal error: {e}")
