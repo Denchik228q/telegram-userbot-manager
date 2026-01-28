@@ -159,7 +159,7 @@ class MailingScheduler:
                     continue
                 
                 # Запускаем рассылку для этого аккаунта
-                                await self.run_account_mailing(account, account_targets, mailing)
+                await self.run_account_mailing(account, account_targets, mailing)
                 
                 # Задержка между аккаунтами
                 await asyncio.sleep(5)
