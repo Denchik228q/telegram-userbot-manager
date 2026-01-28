@@ -462,7 +462,7 @@ class UserbotManager:
                 entity = await client.get_entity(target_clean)
                 logger.info(f"✅ Entity found: {entity.__class__.__name__}")
                 
-                                await client.send_file(entity, photo_path, caption=caption)
+                await client.send_file(entity, photo_path, caption=caption)
                 logger.info(f"✅ Photo sent to {target_clean}")
                 return {'success': True}
                 
