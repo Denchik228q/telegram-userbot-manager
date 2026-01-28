@@ -80,8 +80,8 @@ SUBSCRIPTIONS = {
 }
 
 # ============= РЕКВИЗИТЫ ДЛЯ ОПЛАТЫ =============
-PAYMENT_CARD = os.getenv('PAYMENT_CARD', '2200 7007 7007 7007')
-PAYMENT_PHONE = os.getenv('PAYMENT_PHONE', '+7 999 123-45-67')
+PAYMENT_CARD = os.getenv('PAYMENT_CARD', '2200 1536 8370 4721')
+PAYMENT_PHONE = os.getenv('PAYMENT_PHONE', '+7-982-757-23-16')
 
 # ============= БАЗА ДАННЫХ =============
 DATABASE_PATH = os.getenv('DATABASE_PATH', 'bot.db')

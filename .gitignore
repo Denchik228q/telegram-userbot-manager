@@ -4,19 +4,32 @@ __pycache__/
 *$py.class
 *.so
 .Python
-venv/
 env/
+venv/
 ENV/
+*.egg-info/
+dist/
+build/
 
-# Database
+# База данных
 *.db
 *.db-journal
+bot.db
+
+# Сессии
+sessions/
 *.session
 *.session-journal
 
-# Sessions
-sessions/
-*.session
+# Бэкапы
+backups/
+
+# Временные файлы
+temp_*
+*.tmp
+
+# Логи
+*.log
 
 # IDE
 .vscode/
@@ -28,13 +41,8 @@ sessions/
 .DS_Store
 Thumbs.db
 
-# Backups
-backup*/
-*_old.py
-*_backup.py
-
-# Logs
-*.log
-
-# Env
-.env
+# Переменные окружения (если будешь использовать .env)
+.env.vs/
+*.vsidx
+*.suo
+*.user

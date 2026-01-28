@@ -2,13 +2,12 @@
 # -*- coding: utf-8 -*-
 
 """
-Telegram Manager Bot
+Telegram Manager Bot - Complete Version
 """
 
 import logging
 import asyncio
 import os
-from backup_scheduler import backup_scheduler
 from datetime import datetime, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -35,37 +34,40 @@ from config_userbot import (
 )
 from database import Database
 from userbot import UserbotManager
+from scheduler import MailingScheduler
 
+# Настройка логирования
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
+# Инициализация
 db = Database()
 userbot_manager = UserbotManager()
+mailing_scheduler = MailingScheduler(db, userbot_manager)
+mailing_scheduler.start()
 
-# Состояния
+# Состояния для ConversationHandler
 PHONE, CODE, PASSWORD = range(3)
 SUPPORT_MESSAGE = 10
 PAYMENT_RECEIPT = 20
 ADMIN_MAILING_MESSAGE, ADMIN_MAILING_CONFIRM = 100, 101
 USER_MAILING_TARGETS, USER_MAILING_MESSAGE, USER_MAILING_CONFIRM = 200, 201, 202
 
+# ==================== КЛАВИАТУРЫ ====================
 
-# ============= ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ =============
-
-def get_main_menu_keyboard(user_data: dict = None):
-    """Главное меню"""
+def get_main_menu_keyboard():
+    """Клавиатура главного меню"""
     keyboard = [
-        [InlineKeyboardButton("🤖 Подключить аккаунт", callback_data="connect_userbot")],
-        [InlineKeyboardButton("📨 Начать рассылку", callback_data="start_mailing")],
-        [InlineKeyboardButton("📊 Мой статус", callback_data="my_status")],
-        [InlineKeyboardButton("💎 Тарифы и оплата", callback_data="view_tariffs")],
-        [InlineKeyboardButton("💬 Поддержка", callback_data="support")]
+        [InlineKeyboardButton("📨 Новая рассылка", callback_data='start_mailing')],
+        [InlineKeyboardButton("⏰ Планировщик", callback_data='schedule_menu')],
+        [InlineKeyboardButton("📱 Мои аккаунты", callback_data='accounts_menu')],
+        [InlineKeyboardButton("📊 История рассылок", callback_data='mailing_history')],
+        [InlineKeyboardButton("ℹ️ Помощь", callback_data='help')]
     ]
     return InlineKeyboardMarkup(keyboard)
-
 
 def get_subscription_keyboard():
     """Клавиатура подписки на канал"""
@@ -74,7 +76,6 @@ def get_subscription_keyboard():
         [InlineKeyboardButton("✅ Я подписался", callback_data="check_subscription")]
     ]
     return InlineKeyboardMarkup(keyboard)
-
 
 def get_admin_keyboard():
     """Админ-панель"""
@@ -87,9 +88,10 @@ def get_admin_keyboard():
     ]
     return InlineKeyboardMarkup(keyboard)
 
+# ==================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ====================
 
 async def check_subscription(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> bool:
-    """Проверка подписки"""
+    """Проверка подписки на канал"""
     try:
         channel_username = PUBLIC_CHANNEL_URL.replace('@', '').replace('https://t.me/', '')
         member = await context.bot.get_chat_member(chat_id=f"@{channel_username}", user_id=user_id)
@@ -97,42 +99,47 @@ async def check_subscription(user_id: int, context: ContextTypes.DEFAULT_TYPE) -
             return False
     except Exception as e:
         logger.error(f"Error checking subscription: {e}")
-        return True
+        return True  # В случае ошибки разрешаем доступ
     return True
 
-
-# ============= КОМАНДЫ =============
+# ==================== КОМАНДЫ ====================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Команда /start"""
-    user = update.effective_user
-    user_id = user.id
+    """Обработчик команды /start"""
+    user_id = update.effective_user.id
+    username = update.effective_user.username
     
-    if not db.get_user(user_id):
-        db.add_user(
-            telegram_id=user_id,
-            username=user.username or "",
-            first_name=user.first_name or "",
-            subscription_plan="trial",
-            subscription_end=datetime.now() + timedelta(days=3)
-        )
-        logger.info(f"✅ New user: {user_id}")
+    db.add_user(user_id, username)
     
-    is_subscribed = await check_subscription(user_id, context)
+    # Проверяем аккаунты
+    accounts = db.get_user_accounts(user_id)
+    accounts_text = f"📱 Аккаунтов: {len(accounts)}" if accounts else "⚠️ Аккаунты не добавлены"
     
-    if not is_subscribed:
+    if update.message:
         await update.message.reply_text(
-            f"👋 Добро пожаловать, {user.first_name}!\n\n"
-            f"🔔 Для начала работы подпишитесь на канал:",
-            reply_markup=get_subscription_keyboard()
-        )
-    else:
-        await update.message.reply_text(
-            f"👋 Добро пожаловать, {user.first_name}!\n\n"
+            f"👋 Добро пожаловать в бот массовых рассылок!\n\n"
+            f"{accounts_text}\n\n"
+            f"🎯 Возможности:\n"
+            f"• Рассылка в группы/каналы\n"
+            f"• Несколько аккаунтов\n"
+            f"• Планировщик рассылок\n"
+            f"• Автоматическое вступление\n\n"
             f"Выберите действие:",
             reply_markup=get_main_menu_keyboard()
         )
-
+    else:
+        query = update.callback_query
+        await query.edit_message_text(
+            f"👋 Добро пожаловать в бот массовых рассылок!\n\n"
+            f"{accounts_text}\n\n"
+            f"🎯 Возможности:\n"
+            f"• Рассылка в группы/каналы\n"
+            f"• Несколько аккаунтов\n"
+            f"• Планировщик рассылок\n"
+            f"• Автоматическое вступление\n\n"
+            f"Выберите действие:",
+            reply_markup=get_main_menu_keyboard()
+        )
 
 async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Админ-панель"""
@@ -149,13 +156,9 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 📊 *Статистика:*
 👥 Всего пользователей: {stats.get('total_users', 0)}
-💰 Активных подписок: {stats.get('active_subscriptions', 0)}
-📅 Новых за сегодня: {stats.get('new_today', 0)}
-
-💎 *По тарифам:*
-• Любительская: {stats.get('amateur_users', 0)}
-• Профессиональная: {stats.get('pro_users', 0)}
-• Премиум: {stats.get('premium_users', 0)}
+📱 Всего аккаунтов: {stats.get('total_accounts', 0)}
+📨 Всего рассылок: {stats.get('total_mailings', 0)}
+⏰ Запланировано: {stats.get('total_scheduled', 0)}
     """
     
     await update.message.reply_text(
@@ -164,9 +167,8 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode='Markdown'
     )
 
-
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Отмена"""
+    """Отмена текущей операции"""
     context.user_data.clear()
     await update.message.reply_text(
         "❌ Операция отменена",
@@ -174,8 +176,21 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     return ConversationHandler.END
 
+# ==================== CALLBACK ОБРАБОТЧИКИ ====================
 
-# ============= CALLBACK ОБРАБОТЧИКИ =============
+async def back_to_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Возврат в главное меню"""
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = update.effective_user.id
+    accounts = db.get_user_accounts(user_id)
+    accounts_text = f"📱 Аккаунтов: {len(accounts)}" if accounts else "⚠️ Аккаунты не добавлены"
+    
+    await query.edit_message_text(
+        f"Главное меню\n\n{accounts_text}\n\nВыберите действие:",
+        reply_markup=get_main_menu_keyboard()
+    )
 
 async def check_subscription_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Проверка подписки callback"""
@@ -193,713 +208,632 @@ async def check_subscription_callback(update: Update, context: ContextTypes.DEFA
     else:
         await query.answer("❌ Вы ещё не подписались!", show_alert=True)
 
-
-async def my_status_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Мой статус"""
-    query = update.callback_query
-    await query.answer()
-    
-    user_id = update.effective_user.id
-    user_data = db.get_user(user_id)
-    
-    if not user_data:
-        await query.edit_message_text("❌ Пользователь не найден")
-        return
-    
-    subscription_active = user_data['subscription_end'] > datetime.now()
-    plan_info = SUBSCRIPTIONS.get(user_data['subscription_plan'], SUBSCRIPTIONS['trial'])
-    session_status = "✅ Подключен" if user_data.get('session_id') else "❌ Не подключен"
-    
-    status_text = f"""
-📊 *Ваш статус:*
-
-👤 ID: `{user_id}`
-📱 Телефон: {user_data.get('phone_number', 'Не указан')}
-
-📦 *Подписка:* {plan_info['name']}
-⏰ *Действует до:* {user_data['subscription_end'].strftime('%d.%m.%Y %H:%M')}
-{'✅' if subscription_active else '❌'} *Статус:* {'Активна' if subscription_active else 'Истекла'}
-
-🤖 *Юзербот:* {session_status}
-    """
-    
-    keyboard = [[InlineKeyboardButton("◀️ Назад", callback_data="back_to_menu")]]
-    
-    await query.edit_message_text(
-        status_text,
-        parse_mode='Markdown',
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
-
-
-async def view_tariffs_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Показать тарифы"""
-    query = update.callback_query
-    await query.answer()
-    
-    tariffs_text = "💎 *Доступные тарифы:*\n\n"
-    keyboard = []
-    
-    for plan_id, plan in SUBSCRIPTIONS.items():
-        if plan_id == 'trial':
-            continue
-        
-        tariffs_text += f"*{plan['name']}* - {plan['price']}₽/{plan['duration']} дн.\n"
-        tariffs_text += f"{plan['description']}\n\n"
-        
-        keyboard.append([
-            InlineKeyboardButton(
-                f"💳 Купить {plan['name']} - {plan['price']}₽",
-                callback_data=f"buy_{plan_id}"
-            )
-        ])
-    
-    keyboard.append([InlineKeyboardButton("◀️ Назад", callback_data="back_to_menu")])
-    
-    await query.edit_message_text(
-        tariffs_text,
-        parse_mode='Markdown',
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
-
-
-async def back_to_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Вернуться в главное меню"""
-    query = update.callback_query
-    await query.answer()
-    
-    await query.edit_message_text(
-        "Выберите действие:",
-        reply_markup=get_main_menu_keyboard()
-    )
-
-
-# ============= ПОДКЛЮЧЕНИЕ ЮЗЕРБОТА =============
+# ==================== ПОДКЛЮЧЕНИЕ АККАУНТА ====================
 
 async def connect_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Начало подключения"""
+    """Начало подключения аккаунта"""
     query = update.callback_query
     await query.answer()
     
-    user_id = update.effective_user.id
-    user_data = db.get_user(user_id)
-    
-    if not user_data or user_data['subscription_end'] < datetime.now():
-        await query.answer("❌ Нужна активная подписка!", show_alert=True)
-        await query.edit_message_text(
-            "💎 Для подключения аккаунта приобретите подписку.",
-            reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("💎 Посмотреть тарифы", callback_data="view_tariffs")
-            ]])
-        )
-        return ConversationHandler.END
-    
     await query.edit_message_text(
-        "📱 *Подключение аккаунта*\n\n"
-        "Введите номер телефона:\n"
+        "📱 *Добавление аккаунта*\n\n"
+        "Введите номер телефона в международном формате:\n"
         "Пример: `+79991234567`\n\n"
-        "Команда /cancel для отмены",
+        "Или /cancel для отмены",
         parse_mode='Markdown'
     )
     
     return PHONE
 
-
 async def receive_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Получение телефона"""
+    """Обработка номера телефона"""
     phone = update.message.text.strip()
     
-    if not phone.startswith('+') or not phone[1:].isdigit():
+    if not phone.startswith('+'):
+        phone = '+' + phone
+    
+    user_id = update.effective_user.id
+    
+    # Проверяем, есть ли уже такой аккаунт
+    existing = db.get_account_by_phone(user_id, phone)
+    if existing:
         await update.message.reply_text(
-            "❌ Неверный формат!\n\n"
-            "Используйте: `+79991234567`\n\n"
-            "/cancel для отмены",
-            parse_mode='Markdown'
+            "⚠️ Этот номер уже добавлен!\n\n"
+            "Используйте /start для возврата в меню."
         )
-        return PHONE
+        return ConversationHandler.END
     
     context.user_data['phone'] = phone
     
-    try:
-        result = await userbot_manager.send_code(phone)
-        
-        if result['success']:
-            context.user_data['phone_code_hash'] = result['phone_code_hash']
-            await update.message.reply_text(
-                "📩 *Код отправлен!*\n\n"
-                "Введите код из Telegram:\n"
-                "Пример: `12345`",
-                parse_mode='Markdown'
-            )
-            return CODE
-        else:
-            await update.message.reply_text(
-                f"❌ Ошибка: {result.get('error', 'Неизвестная ошибка')}\n\n"
-                "/cancel для отмены"
-            )
-            return PHONE
-    except Exception as e:
-        logger.error(f"Error sending code: {e}")
-        await update.message.reply_text("❌ Ошибка. Попробуйте позже")
+    # Отправляем код
+    result = await userbot_manager.send_code(phone)
+    
+    if result['success']:
+        context.user_data['phone_code_hash'] = result['phone_code_hash']
+        await update.message.reply_text(
+            "✅ Код отправлен в Telegram!\n\n"
+            "📲 Введите код подтверждения:"
+        )
+        return CODE
+    else:
+        await update.message.reply_text(
+            f"❌ Ошибка: {result['error']}\n\n"
+            "Используйте /start для повтора."
+        )
         return ConversationHandler.END
-
 
 async def receive_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Получение кода"""
-    user_id = update.effective_user.id
+    """Обработка кода подтверждения"""
     code = update.message.text.strip()
-    phone = context.user_data.get('phone')
-    phone_code_hash = context.user_data.get('phone_code_hash')
+    phone = context.user_data['phone']
+    phone_code_hash = context.user_data['phone_code_hash']
     
-    if not phone or not phone_code_hash:
-        await update.message.reply_text("❌ Ошибка сессии. Начните заново")
-        return ConversationHandler.END
+    result = await userbot_manager.sign_in(phone, code, phone_code_hash)
     
-    try:
-        result = await userbot_manager.sign_in(phone, code, phone_code_hash)
+    if result['success']:
+        session_id = result['session_id']
+        user_id = update.effective_user.id
         
-        if result['success']:
-            session_id = result['session_id']
-            db.update_user(telegram_id=user_id, phone_number=phone, session_id=session_id)
-            
+        # Добавляем аккаунт в БД
+        account_id = db.add_account(user_id, phone, session_id)
+        
+        if account_id:
             await update.message.reply_text(
-                "✅ *Аккаунт подключен!*\n\n"
+                "✅ *Аккаунт успешно добавлен!*\n\n"
                 "Теперь вы можете:\n"
-                "• 📨 Начать рассылку\n"
-                "• 💬 Отправлять сообщения\n\n"
-                "🔒 Для доступа к приватному каналу обратитесь к администратору",
+                "• Добавить ещё аккаунты\n"
+                "• Начать рассылку\n"
+                "• Настроить расписание",
                 parse_mode='Markdown',
                 reply_markup=get_main_menu_keyboard()
             )
-            
-            # Уведомляем админа
-            try:
-                await context.bot.send_message(
-                    chat_id=ADMIN_ID,
-                    text=f"🤖 *Новое подключение*\n\n"
-                         f"👤 {update.effective_user.first_name}\n"
-                         f"🆔 `{user_id}`\n"
-                         f"📱 `{phone}`\n\n"
-                         f"Добавьте в приватный канал: {PRIVATE_CHANNEL_URL}",
-                    parse_mode='Markdown'
-                )
-            except:
-                pass
-            
-            context.user_data.clear()
-            return ConversationHandler.END
-        
-        elif result.get('password_required'):
-            await update.message.reply_text(
-                "🔐 *Требуется 2FA*\n\nВведите пароль:",
-                parse_mode='Markdown'
-            )
-            return PASSWORD
         else:
-            await update.message.reply_text(
-                f"❌ Ошибка: {result.get('error', 'Неверный код')}\n\n/cancel для отмены"
-            )
-            return CODE
-    except Exception as e:
-        logger.error(f"Error signing in: {e}")
-        await update.message.reply_text("❌ Ошибка. Попробуйте позже")
+            await update.message.reply_text("❌ Ошибка сохранения аккаунта")
+        
+        context.user_data.clear()
         return ConversationHandler.END
-
+    
+    elif result.get('password_required'):
+        await update.message.reply_text(
+            "🔐 Требуется пароль 2FA\n\n"
+            "Введите пароль:"
+        )
+        return PASSWORD
+    
+    else:
+        await update.message.reply_text(
+            f"❌ Ошибка: {result['error']}\n\n"
+            "Используйте /start для повтора."
+        )
+        return ConversationHandler.END
 
 async def receive_password(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Получение пароля 2FA"""
-    user_id = update.effective_user.id
+    """Обработка пароля 2FA"""
     password = update.message.text.strip()
-    phone = context.user_data.get('phone')
+    phone = context.user_data['phone']
     
-    if not phone:
-        await update.message.reply_text("❌ Ошибка сессии")
-        return ConversationHandler.END
+    result = await userbot_manager.sign_in_2fa(phone, password)
     
-    try:
-        result = await userbot_manager.sign_in_2fa(phone, password)
+    if result['success']:
+        session_id = result['session_id']
+        user_id = update.effective_user.id
         
-        if result['success']:
-            session_id = result['session_id']
-            db.update_user(telegram_id=user_id, phone_number=phone, session_id=session_id)
-            
+        # Добавляем аккаунт в БД
+        account_id = db.add_account(user_id, phone, session_id)
+        
+        if account_id:
             await update.message.reply_text(
-                "✅ *Аккаунт подключен!*\n\n"
+                "✅ *Аккаунт успешно добавлен!*\n\n"
                 "Теперь вы можете:\n"
-                "• 📨 Начать рассылку\n"
-                "• 💬 Отправлять сообщения",
+                "• Добавить ещё аккаунты\n"
+                "• Начать рассылку\n"
+                "• Настроить расписание",
                 parse_mode='Markdown',
                 reply_markup=get_main_menu_keyboard()
             )
-            
-            # Уведомляем админа
-            try:
-                await context.bot.send_message(
-                    chat_id=ADMIN_ID,
-                    text=f"🤖 *Новое подключение*\n\n"
-                         f"👤 {update.effective_user.first_name}\n"
-                         f"🆔 `{user_id}`\n"
-                         f"📱 `{phone}`",
-                    parse_mode='Markdown'
-                )
-            except:
-                pass
-            
-            context.user_data.clear()
-            return ConversationHandler.END
         else:
-            await update.message.reply_text(
-                f"❌ Ошибка: {result.get('error', 'Неверный пароль')}\n\n/cancel"
-            )
-            return PASSWORD
-    except Exception as e:
-        logger.error(f"Error with 2FA: {e}")
-        await update.message.reply_text("❌ Ошибка. Попробуйте позже")
+            await update.message.reply_text("❌ Ошибка сохранения аккаунта")
+        
+        context.user_data.clear()
+        return ConversationHandler.END
+    
+    else:
+        await update.message.reply_text(
+            f"❌ Ошибка: {result['error']}\n\n"
+            "Используйте /start для повтора."
+        )
         return ConversationHandler.END
 
+# ==================== УПРАВЛЕНИЕ АККАУНТАМИ ====================
 
-# ============= ПОДДЕРЖКА =============
-
-async def support_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Начало обращения в поддержку"""
+async def accounts_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Меню управления аккаунтами"""
     query = update.callback_query
     await query.answer()
+    
+    user_id = update.effective_user.id
+    accounts = db.get_user_accounts(user_id)
+    
+    if not accounts:
+        keyboard = [
+            [InlineKeyboardButton("➕ Добавить аккаунт", callback_data='connect_userbot')],
+            [InlineKeyboardButton("◀️ Назад", callback_data='back_to_menu')]
+        ]
+        await query.edit_message_text(
+            "📱 *Управление аккаунтами*\n\n"
+            "У вас пока нет добавленных аккаунтов.\n"
+            "Добавьте первый аккаунт для начала работы!",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode='Markdown'
+        )
+        return
+    
+    # Формируем список аккаунтов
+    accounts_text = "📱 *Ваши аккаунты:*\n\n"
+    keyboard = []
+    
+    for idx, acc in enumerate(accounts, 1):
+        status = "✅" if acc['is_active'] else "❌"
+        accounts_text += f"{idx}. {status} {acc['account_name']}\n   📞 {acc['phone_number']}\n\n"
+        
+        keyboard.append([
+            InlineKeyboardButton(
+                f"{acc['account_name']}", 
+                callback_data=f"account_{acc['id']}"
+            )
+        ])
+    
+    keyboard.append([InlineKeyboardButton("➕ Добавить аккаунт", callback_data='connect_userbot')])
+    keyboard.append([InlineKeyboardButton("◀️ Назад", callback_data='back_to_menu')])
     
     await query.edit_message_text(
-        "💬 *Техническая поддержка*\n\n"
-        "Опишите вашу проблему или вопрос.\n"
-        "Можете отправить текст или фото.\n\n"
-        "Команда /cancel для отмены",
+        accounts_text,
+        reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode='Markdown'
     )
-    
-    return SUPPORT_MESSAGE
 
-
-async def receive_support_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Получение сообщения для поддержки"""
-    user = update.effective_user
-    message_text = update.message.text or update.message.caption or "[Фото]"
-    
-    db.add_support_ticket(user.id, message_text)
-    
-    admin_keyboard = [[
-        InlineKeyboardButton("✉️ Ответить", url=f"tg://user?id={user.id}")
-    ]]
-    
-    try:
-        if update.message.photo:
-            await context.bot.send_photo(
-                chat_id=ADMIN_ID,
-                photo=update.message.photo[-1].file_id,
-                caption=f"📩 *Обращение в поддержку*\n\n"
-                        f"👤 {user.first_name} (@{user.username or 'нет'})\n"
-                        f"🆔 `{user.id}`\n\n"
-                        f"💬 {message_text}",
-                parse_mode='Markdown',
-                reply_markup=InlineKeyboardMarkup(admin_keyboard)
-            )
-        else:
-            await context.bot.send_message(
-                chat_id=ADMIN_ID,
-                text=f"📩 *Обращение в поддержку*\n\n"
-                     f"👤 {user.first_name} (@{user.username or 'нет'})\n"
-                     f"🆔 `{user.id}`\n\n"
-                     f"💬 {message_text}",
-                parse_mode='Markdown',
-                reply_markup=InlineKeyboardMarkup(admin_keyboard)
-            )
-    except Exception as e:
-        logger.error(f"Error sending to admin: {e}")
-    
-    await update.message.reply_text(
-        "✅ Ваше сообщение отправлено!\n\n"
-        "Администратор ответит в личные сообщения.",
-        reply_markup=get_main_menu_keyboard()
-    )
-    
-    return ConversationHandler.END
-
-
-# ============= ОПЛАТА =============
-
-async def payment_select_plan(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Выбор тарифа"""
+async def account_detail(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Детали конкретного аккаунта"""
     query = update.callback_query
     await query.answer()
     
-    plan_id = query.data.replace('buy_', '')
+    account_id = int(query.data.split('_')[1])
+    account = db.get_account(account_id)
     
-    if plan_id not in SUBSCRIPTIONS:
-        await query.answer("❌ Тариф не найден", show_alert=True)
-        return ConversationHandler.END
+    if not account:
+        await query.edit_message_text("❌ Аккаунт не найден")
+        return
     
-    plan = SUBSCRIPTIONS[plan_id]
-    context.user_data['selected_plan'] = plan_id
+    status = "✅ Активен" if account['is_active'] else "❌ Отключен"
+    
+    text = (
+        f"📱 *{account['account_name']}*\n\n"
+        f"📞 Телефон: `{account['phone_number']}`\n"
+        f"📊 Статус: {status}\n"
+        f"📅 Добавлен: {account['created_at'][:16]}"
+    )
     
     keyboard = [
-        [InlineKeyboardButton("📸 Отправить чек", callback_data="send_receipt")],
-        [InlineKeyboardButton("❌ Отменить", callback_data="cancel_payment")]
+        [InlineKeyboardButton("🗑️ Удалить", callback_data=f"delete_account_{account_id}")],
+        [InlineKeyboardButton("◀️ Назад", callback_data='accounts_menu')]
     ]
     
     await query.edit_message_text(
-        f"💳 *Оформление подписки*\n\n"
-        f"📦 *Тариф:* {plan['name']}\n"
-        f"💰 *Цена:* {plan['price']}₽\n"
-        f"⏰ *Срок:* {plan['duration']} дней\n\n"
-        f"📋 *Что входит:*\n"
-        f"{plan['description']}\n\n"
-        f"💳 *Реквизиты:*\n"
-        f"Карта: `2200 1536 8370 4721`\n"
-        f"Телефон (Любой банк): `+7-982-757-23-16`\n"
-        f"Крипто(TRC20):'TD5EJBjQ3zM2SpgLCaBf4XptT7CoAFWPQr'\n\n "
-        f"❗ После оплаты нажмите 'Отправить чек'",
-        parse_mode='Markdown',
-        reply_markup=InlineKeyboardMarkup(keyboard)
+        text,
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode='Markdown'
     )
-    
-    return PAYMENT_RECEIPT
 
-
-async def send_receipt_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Запрос чека"""
+async def delete_account_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Подтверждение удаления аккаунта"""
     query = update.callback_query
     await query.answer()
     
+    account_id = int(query.data.split('_')[2])
+    account = db.get_account(account_id)
+    
+    if not account:
+        await query.edit_message_text("❌ Аккаунт не найден")
+        return
+    
+    keyboard = [
+        [InlineKeyboardButton("✅ Да, удалить", callback_data=f"confirm_delete_{account_id}")],
+        [InlineKeyboardButton("❌ Отмена", callback_data=f"account_{account_id}")]
+    ]
+    
     await query.edit_message_text(
-        "📸 *Отправьте скриншот чека*\n\n"
-        "Команда /cancel для отмены",
+        f"⚠️ *Подтверждение удаления*\n\n"
+        f"Вы уверены, что хотите удалить аккаунт?\n\n"
+        f"📱 {account['account_name']}\n"
+        f"📞 {account['phone_number']}",
+        reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode='Markdown'
     )
-    
-    return PAYMENT_RECEIPT
 
+async def confirm_delete_account(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Окончательное удаление аккаунта"""
+    query = update.callback_query
+    await query.answer()
+    
+    account_id = int(query.data.split('_')[2])
+    
+    # Отключаем сессию
+    account = db.get_account(account_id)
+    if account:
+        await userbot_manager.disconnect_session(account['session_id'])
+    
+    # Удаляем из БД
+    db.delete_account(account_id)
+    
+    await query.edit_message_text(
+        "✅ Аккаунт успешно удален!",
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("◀️ К аккаунтам", callback_data='accounts_menu')
+        ]])
+    )
 
-async def test_send_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Команда /test - тестовая отправка в один чат"""
-    user_id = update.effective_user.id
+# ==================== ПЛАНИРОВЩИК РАССЫЛОК ====================
+
+async def schedule_mailing_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Меню планирования рассылок"""
+    query = update.callback_query
+    await query.answer()
     
-    if user_id != ADMIN_ID:
-        await update.message.reply_text("❌ Только для админа")
-        return
+    keyboard = [
+        [InlineKeyboardButton("📋 Мои расписания", callback_data='my_schedules')],
+        [InlineKeyboardButton("◀️ Назад", callback_data='back_to_menu')]
+    ]
     
-    # Получаем юзера
-    user_data = db.get_user(user_id)
-    if not user_data or not user_data.get('session_id'):
-        await update.message.reply_text("❌ Аккаунт не подключен")
-        return
-    
-    # Запрашиваем цель
-    await update.message.reply_text(
-        "🧪 *Тестовая отправка*\n\n"
-        "Отправь username или ссылку на группу/канал:",
+    await query.edit_message_text(
+        "⏰ *Планировщик рассылок*\n\n"
+        "Функция планировщика позволит настроить автоматические рассылки.\n\n"
+        "⚠️ В данный момент доступен только ручной запуск рассылок.",
+        reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode='Markdown'
     )
-    
-    return 'test_target'
 
-async def test_target_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Получение цели для теста"""
+async def my_schedules(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Список запланированных рассылок"""
+    query = update.callback_query
+    await query.answer()
+    
     user_id = update.effective_user.id
-    target = update.message.text.strip()
+    schedules = db.get_user_scheduled_mailings(user_id)
     
-    context.user_data['test_target'] = target
-    
-    await update.message.reply_text(
-        f"🎯 Цель: `{target}`\n\n"
-        f"Отправь сообщение для теста:",
-        parse_mode='Markdown'
-    )
-    
-    return 'test_message'
-
-async def test_message_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Получение сообщения и отправка теста"""
-    user_id = update.effective_user.id
-    target = context.user_data.get('test_target')
-    message = update.message.text
-    
-    user_data = db.get_user(user_id)
-    session_id = user_data['session_id']
-    phone = user_data['phone_number']
-    
-    await update.message.reply_text("🔄 *Тестирую...*", parse_mode='Markdown')
-    
-    # Подключение
-    connect_result = await userbot_manager.connect_session(phone, session_id)
-    if not connect_result['success']:
-        await update.message.reply_text("❌ Не удалось подключиться")
-        return ConversationHandler.END
-    
-    client = connect_result['client']
-    
-    # ШАГ 1: Вступление
-    await update.message.reply_text(f"🔄 *Шаг 1: Вступление...*", parse_mode='Markdown')
-    
-    join_result = await userbot_manager.join_chat(
-        session_id=session_id,
-        phone=phone,
-        target=target
-    )
-    
-    if join_result.get('success'):
-        if join_result.get('joined'):
-            join_status = "✅ Вступили"
-        elif join_result.get('already_member'):
-            join_status = "✅ Уже участник"
-        elif join_result.get('is_user'):
-            join_status = "👤 Личка"
-        else:
-            join_status = "✅ OK"
-    else:
-        join_status = f"❌ {join_result.get('error', 'unknown')}"
-    
-    await update.message.reply_text(f"*Результат вступления:*\n{join_status}", parse_mode='Markdown')
-    
-    # ПАУЗА после вступления
-    await asyncio.sleep(3)
-    
-    # ШАГ 2: ПОВТОРНАЯ проверка участия
-    await update.message.reply_text(f"🔄 *Шаг 2: Проверка участия...*", parse_mode='Markdown')
-    
-    try:
-        target_clean = target
-        if target_clean.startswith('https://t.me/'):
-            target_clean = target_clean.replace('https://t.me/', '')
-        if target_clean.startswith('@'):
-            target_clean = target_clean[1:]
-        
-        entity = await client.get_entity(target_clean)
-        permissions = await client.get_permissions(entity)
-        
-        member_status = f"✅ Участник (ID: {entity.id})"
-        await update.message.reply_text(
-            f"*Проверка участия:*\n{member_status}\n\n"
-            f"Права:\n"
-            f"• send_messages: {getattr(permissions, 'send_messages', 'N/A')}\n"
-            f"• is_banned: {getattr(permissions, 'is_banned', 'N/A')}",
-            parse_mode='Markdown'
-        )
-    except Exception as check_err:
-        await update.message.reply_text(f"⚠️ Не удалось проверить: {check_err}")
-    
-    # ПАУЗА
-    await asyncio.sleep(2)
-    
-    # ШАГ 3: Отправка
-    await update.message.reply_text(f"🔄 *Шаг 3: Отправка...*", parse_mode='Markdown')
-    
-    result = await userbot_manager.send_message(
-        session_id=session_id,
-        phone=phone,
-        target=target,
-        message=message
-    )
-    
-    if result['success']:
-        await update.message.reply_text(
-            f"✅ *УСПЕХ!*\n\n"
-            f"Сообщение отправлено в:\n`{target}`",
-            parse_mode='Markdown'
-        )
-    else:
-        await update.message.reply_text(
-            f"❌ *ОШИБКА!*\n\n"
-            f"Цель: `{target}`\n"
-            f"Ошибка: `{result.get('error')}`\n\n"
-            f"Смотри логи Railway для деталей!",
-            parse_mode='Markdown'
-        )
-    
-    context.user_data.clear()
-    return ConversationHandler.END
-
-
-async def receive_receipt(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Получение чека"""
-    user_id = update.effective_user.id
-    plan_id = context.user_data.get('selected_plan')
-    
-    if not plan_id or plan_id not in SUBSCRIPTIONS:
-        await update.message.reply_text("❌ Ошибка: тариф не выбран")
-        return ConversationHandler.END
-    
-    plan = SUBSCRIPTIONS[plan_id]
-    
-    if not update.message.photo:
-        await update.message.reply_text(
-            "❌ Пожалуйста, отправьте фото чека!\n\n/cancel для отмены"
-        )
-        return PAYMENT_RECEIPT
-    
-    photo = update.message.photo[-1]
-    payment_id = db.add_payment(user_id=user_id, amount=plan['price'], plan=plan_id, status='pending')
-    
-    keyboard = [[
-        InlineKeyboardButton(
-            "✅ Подтвердить оплату",
-            callback_data=f"confirm_pay_{payment_id}_{user_id}_{plan_id}"
-        )
-    ]]
-    
-    try:
-        await context.bot.send_photo(
-            chat_id=ADMIN_ID,
-            photo=photo.file_id,
-            caption=f"💰 *Новый платёж*\n\n"
-                    f"👤 {update.effective_user.first_name}\n"
-                    f"🆔 `{user_id}`\n"
-                    f"📦 {plan['name']}\n"
-                    f"💵 {plan['price']}₽\n\n"
-                    f"❗ Проверьте и подтвердите",
-            parse_mode='Markdown',
+    if not schedules:
+        keyboard = [[InlineKeyboardButton("◀️ Назад", callback_data='schedule_menu')]]
+        await query.edit_message_text(
+            "📋 У вас нет запланированных рассылок",
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
-    except Exception as e:
-        logger.error(f"Error sending receipt to admin: {e}")
+        return
     
-    await update.message.reply_text(
-        "✅ *Чек отправлен администратору!*\n\n"
-        "⏳ Ожидайте подтверждения.\n"
-        "Вы получите уведомление после активации.",
-        parse_mode='Markdown',
-        reply_markup=get_main_menu_keyboard()
+    text = "📋 *Ваши запланированные рассылки:*\n\n"
+    keyboard = []
+    
+        for idx, schedule in enumerate(schedules, 1):
+        targets_count = len(schedule['targets'])
+        text += f"{idx}. 📨 {targets_count} чатов\n"
+        
+        keyboard.append([
+            InlineKeyboardButton(
+                f"{idx}. Рассылка",
+                callback_data=f"schedule_detail_{schedule['id']}"
+            )
+        ])
+    
+    keyboard.append([InlineKeyboardButton("◀️ Назад", callback_data='schedule_menu')])
+    
+    await query.edit_message_text(
+        text,
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode='Markdown'
     )
-    
-    context.user_data.clear()
-    return ConversationHandler.END
 
-
-async def cancel_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Отмена оплаты"""
+async def schedule_detail(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Детали запланированной рассылки"""
     query = update.callback_query
     await query.answer()
     
-    context.user_data.clear()
-    await query.edit_message_text("❌ Оплата отменена", reply_markup=get_main_menu_keyboard())
-    return ConversationHandler.END
+    schedule_id = int(query.data.split('_')[2])
+    schedules = db.get_user_scheduled_mailings(update.effective_user.id)
+    schedule = next((s for s in schedules if s['id'] == schedule_id), None)
+    
+    if not schedule:
+        await query.edit_message_text("❌ Расписание не найдено")
+        return
+    
+    message_preview = schedule['message_text'] or schedule['message_caption'] or "[Медиа]"
+    message_preview = message_preview[:50] + "..." if len(message_preview) > 50 else message_preview
+    
+    text = (
+        f"📋 *Детали рассылки #{schedule['id']}*\n\n"
+        f"📨 Сообщение: {message_preview}\n"
+        f"🎯 Чатов: {len(schedule['targets'])}\n"
+        f"📅 Создано: {schedule['created_at'][:16]}\n"
+    )
+    
+    if schedule['last_run']:
+        text += f"⏰ Последний запуск: {schedule['last_run'][:16]}\n"
+    
+    keyboard = [
+        [InlineKeyboardButton("🗑️ Удалить", callback_data=f"delete_schedule_{schedule_id}")],
+        [InlineKeyboardButton("◀️ Назад", callback_data='my_schedules')]
+    ]
+    
+    await query.edit_message_text(
+        text,
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode='Markdown'
+    )
 
+async def delete_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Удаление запланированной рассылки"""
+    query = update.callback_query
+    await query.answer()
+    
+    schedule_id = int(query.data.split('_')[2])
+    
+    # Удаляем из планировщика
+    mailing_scheduler.remove_job(schedule_id)
+    
+    # Удаляем из БД
+    db.delete_scheduled_mailing(schedule_id)
+    
+    await query.edit_message_text(
+        "✅ Запланированная рассылка удалена!",
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("◀️ К расписаниям", callback_data='my_schedules')
+        ]])
+    )
 
-# ============= РАССЫЛКА ПОЛЬЗОВАТЕЛЯ =============
+# ==================== ВЫБОР АККАУНТОВ ДЛЯ РАССЫЛКИ ====================
 
-async def user_mailing_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Начало рассылки пользователя"""
+async def select_accounts_for_mailing(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Выбор аккаунтов для рассылки"""
     query = update.callback_query
     await query.answer()
     
     user_id = update.effective_user.id
-    user_data = db.get_user(user_id)
+    accounts = db.get_user_accounts(user_id)
     
-    # Проверка подключения юзербота
-    if not user_data or not user_data.get('session_id'):
+    if not accounts:
         await query.edit_message_text(
-            "❌ *Аккаунт не подключен!*\n\n"
-            "Сначала подключите Telegram аккаунт.",
-            parse_mode='Markdown',
+            "❌ У вас нет добавленных аккаунтов!\n"
+            "Сначала добавьте хотя бы один аккаунт.",
             reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("🤖 Подключить аккаунт", callback_data="connect_userbot")
+                InlineKeyboardButton("➕ Добавить аккаунт", callback_data='connect_userbot')
             ]])
         )
-        return ConversationHandler.END
+        return
     
-    # Проверка подписки
-    if user_data['subscription_end'] < datetime.now():
-        await query.edit_message_text(
-            "❌ *Подписка истекла!*\n\n"
-            "Для рассылки нужна активная подписка.",
-            parse_mode='Markdown',
-            reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("💎 Продлить подписку", callback_data="view_tariffs")
-            ]])
-        )
-        return ConversationHandler.END
+    # Инициализируем список выбранных аккаунтов если его нет
+    if 'selected_accounts' not in context.user_data:
+        context.user_data['selected_accounts'] = []
     
-    plan_info = SUBSCRIPTIONS.get(user_data['subscription_plan'], SUBSCRIPTIONS['trial'])
+    selected = context.user_data['selected_accounts']
+    
+    text = "👥 *Выберите аккаунты для рассылки:*\n\n"
+    keyboard = []
+    
+    for acc in accounts:
+        is_selected = acc['id'] in selected
+        checkbox = "☑️" if is_selected else "⬜️"
+        text += f"{checkbox} {acc['account_name']} ({acc['phone_number']})\n"
+        
+        keyboard.append([
+            InlineKeyboardButton(
+                f"{checkbox} {acc['account_name']}",
+                callback_data=f"toggle_account_{acc['id']}"
+            )
+        ])
+    
+    text += f"\n✅ Выбрано: {len(selected)}/{len(accounts)}"
+    
+    keyboard.append([
+        InlineKeyboardButton("✅ Выбрать все", callback_data='select_all_accounts'),
+        InlineKeyboardButton("❌ Снять все", callback_data='deselect_all_accounts')
+    ])
+    keyboard.append([InlineKeyboardButton("➡️ Продолжить", callback_data='continue_with_selected')])
+    keyboard.append([InlineKeyboardButton("◀️ Назад", callback_data='back_to_menu')])
     
     await query.edit_message_text(
-        f"📨 *Создание рассылки*\n\n"
-        f"📋 *Ваши лимиты:*\n"
-        f"• Сообщений в день: {plan_info['messages_limit']}\n"
-        f"• Аккаунтов: {plan_info['accounts_limit']}\n\n"
-        f"📝 *Шаг 1: Укажите получателей*\n\n"
-        f"Отправьте usernames через запятую:\n"
-        f"Пример: `@user1, @user2, @user3`\n\n"
-        f"Или ссылки:\n"
-        f"Пример: `https://t.me/group1, https://t.me/group2`\n\n"
-        f"⚠️ Рассылка пойдёт с ВАШЕГО аккаунта!\n\n"
-        f"Команда /cancel для отмены",
+        text,
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode='Markdown'
+    )
+
+async def toggle_account_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Переключение выбора аккаунта"""
+    query = update.callback_query
+    await query.answer()
+    
+    account_id = int(query.data.split('_')[2])
+    
+    if 'selected_accounts' not in context.user_data:
+        context.user_data['selected_accounts'] = []
+    
+    if account_id in context.user_data['selected_accounts']:
+        context.user_data['selected_accounts'].remove(account_id)
+    else:
+        context.user_data['selected_accounts'].append(account_id)
+    
+    # Обновляем меню
+    await select_accounts_for_mailing(update, context)
+
+async def select_all_accounts(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Выбрать все аккаунты"""
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = update.effective_user.id
+    accounts = db.get_user_accounts(user_id)
+    context.user_data['selected_accounts'] = [acc['id'] for acc in accounts]
+    
+    await select_accounts_for_mailing(update, context)
+
+async def deselect_all_accounts(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Снять выбор со всех аккаунтов"""
+    query = update.callback_query
+    await query.answer()
+    
+    context.user_data['selected_accounts'] = []
+    await select_accounts_for_mailing(update, context)
+
+async def use_all_accounts(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Использовать все аккаунты"""
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = update.effective_user.id
+    accounts = db.get_user_accounts(user_id)
+    
+    if not accounts:
+        await query.edit_message_text(
+            "❌ У вас нет добавленных аккаунтов!",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("➕ Добавить", callback_data='connect_userbot')
+            ]])
+        )
+        return ConversationHandler.END
+    
+    context.user_data['selected_accounts'] = [acc['id'] for acc in accounts]
+    
+    await query.edit_message_text(
+        f"✅ Выбраны все аккаунты ({len(accounts)} шт.)\n\n"
+        f"📨 Теперь отправьте сообщение для рассылки:"
+    )
+    
+    return USER_MAILING_MESSAGE
+
+async def continue_with_selected(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Продолжить с выбранными аккаунтами"""
+    query = update.callback_query
+    await query.answer()
+    
+    selected = context.user_data.get('selected_accounts', [])
+    
+    if not selected:
+        await query.answer("❌ Выберите хотя бы один аккаунт!", show_alert=True)
+        return
+    
+    await query.edit_message_text(
+        f"✅ Выбрано аккаунтов: {len(selected)}\n\n"
+        f"📨 Теперь отправьте сообщение для рассылки:"
+    )
+    
+    return USER_MAILING_MESSAGE
+
+# ==================== РАССЫЛКА ====================
+
+async def start_mailing(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Начало создания рассылки"""
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = update.effective_user.id
+    
+    # Проверяем аккаунты
+    accounts = db.get_user_accounts(user_id)
+    if not accounts:
+        await query.edit_message_text(
+            "❌ Сначала добавьте хотя бы один аккаунт!",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("➕ Добавить аккаунт", callback_data='connect_userbot')
+            ]])
+        )
+        return ConversationHandler.END
+    
+    await query.edit_message_text(
+        "📨 *Создание рассылки*\n\n"
+        "Отправьте список ссылок на группы/каналы (по одной на строку):\n\n"
+        "Примеры:\n"
+        "• https://t.me/channel\n"
+        "• @username\n"
+        "• https://t.me/+invitehash\n\n"
+        "Или /cancel для отмены",
         parse_mode='Markdown'
     )
     
     return USER_MAILING_TARGETS
 
-
-async def receive_mailing_targets(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Получение списка получателей"""
-    user_id = update.effective_user.id
-    targets_text = update.message.text.strip()
+async def mailing_targets_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка полученных таргетов"""
+    message = update.message
     
-    targets = [t.strip() for t in targets_text.split(',') if t.strip()]
+    targets_text = message.text.strip()
+    targets = [t.strip() for t in targets_text.split('\n') if t.strip()]
     
     if not targets:
-        await update.message.reply_text(
-            "❌ Не указаны получатели!\n\n"
-            "Отправьте через запятую.\n/cancel для отмены"
-        )
-        return USER_MAILING_TARGETS
-    
-    user_data = db.get_user(user_id)
-    plan_info = SUBSCRIPTIONS.get(user_data['subscription_plan'], SUBSCRIPTIONS['trial'])
-    
-    if len(targets) > plan_info['messages_limit']:
-        await update.message.reply_text(
-            f"❌ Превышен лимит!\n\n"
-            f"Ваш лимит: {plan_info['messages_limit']}\n"
-            f"Вы указали: {len(targets)}\n\n/cancel"
+        await message.reply_text(
+            "❌ Не найдено ни одной ссылки!\n\n"
+            "Отправьте ссылки заново или используйте /cancel"
         )
         return USER_MAILING_TARGETS
     
     context.user_data['mailing_targets'] = targets
     
-    await update.message.reply_text(
-        f"✅ Получателей: {len(targets)}\n\n"
-        f"📝 *Шаг 2: Отправьте сообщение*\n\n"
-        f"Можете отправить:\n"
-        f"• Текст\n"
-        f"• Фото с подписью\n"
-        f"• Видео с подписью\n\n"
-        f"Это сообщение получат все указанные адресаты с ВАШЕГО аккаунта.",
-        parse_mode='Markdown'
+    # Переходим к выбору аккаунтов
+    keyboard = [
+        [InlineKeyboardButton("👥 Выбрать аккаунты", callback_data='select_accounts')],
+        [InlineKeyboardButton("🚀 Использовать все", callback_data='use_all_accounts')]
+    ]
+    
+    await message.reply_text(
+        f"✅ Получено {len(targets)} ссылок\n\n"
+        f"Выберите аккаунты для рассылки:",
+        reply_markup=InlineKeyboardMarkup(keyboard)
     )
     
     return USER_MAILING_MESSAGE
 
-
-async def receive_user_mailing_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Получение сообщения для рассылки"""
-    context.user_data['mailing_message'] = update.message
-    targets = context.user_data.get('mailing_targets', [])
+async def mailing_message_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка сообщения для рассылки"""
+    message = update.message
+    
+    context.user_data['mailing_message'] = message
+    
+    targets_count = len(context.user_data.get('mailing_targets', []))
+    accounts_count = len(context.user_data.get('selected_accounts', []))
+    
+    preview = ""
+    if message.text:
+        preview = message.text[:100] + "..." if len(message.text) > 100 else message.text
+    elif message.photo:
+        preview = "[Фото]" + (f"\n{message.caption}" if message.caption else "")
+    elif message.video:
+        preview = "[Видео]" + (f"\n{message.caption}" if message.caption else "")
     
     keyboard = [
-        [
-            InlineKeyboardButton("✅ Начать рассылку", callback_data="start_user_mailing"),
-            InlineKeyboardButton("❌ Отменить", callback_data="cancel_user_mailing")
-        ]
+        [InlineKeyboardButton("✅ Запустить", callback_data='confirm_mailing')],
+        [InlineKeyboardButton("❌ Отмена", callback_data='cancel_mailing')]
     ]
     
-    await update.message.reply_text(
-        f"📨 *Подтверждение рассылки*\n\n"
-        f"👥 Получателей: {len(targets)}\n"
-        f"📝 Сообщение готово\n\n"
-        f"⚠️ Рассылка пойдёт с ВАШЕГО аккаунта!\n"
-        f"⏱️ Задержка между сообщениями: {MAILING_DELAY}s\n\n"
-        f"Начать?",
-        parse_mode='Markdown',
-        reply_markup=InlineKeyboardMarkup(keyboard)
+    await message.reply_text(
+        f"📋 *Подтверждение рассылки*\n\n"
+        f"👥 Аккаунтов: {accounts_count}\n"
+        f"🎯 Чатов: {targets_count}\n"
+        f"📨 Сообщение:\n{preview}\n\n"
+        f"⏱ Примерное время: ~{targets_count * 5 // 60} мин",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode='Markdown'
     )
     
     return USER_MAILING_CONFIRM
 
+async def cancel_mailing(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Отмена рассылки"""
+    query = update.callback_query
+    await query.answer()
+    
+    context.user_data.clear()
+    
+    await query.edit_message_text(
+        "❌ Рассылка отменена",
+        reply_markup=get_main_menu_keyboard()
+    )
+    
+    return ConversationHandler.END
 
 async def start_user_mailing(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Запуск рассылки через юзербот"""
@@ -907,101 +841,120 @@ async def start_user_mailing(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await query.answer()
     
     user_id = update.effective_user.id
-    user_data = db.get_user(user_id)
-    
-    if not user_data or not user_data.get('session_id'):
-        await query.edit_message_text("❌ Аккаунт не подключен")
-        return ConversationHandler.END
-    
     targets = context.user_data.get('mailing_targets', [])
     mailing_message = context.user_data.get('mailing_message')
+    selected_accounts = context.user_data.get('selected_accounts', [])
     
     if not targets or not mailing_message:
         await query.edit_message_text("❌ Ошибка: данные не найдены")
         return ConversationHandler.END
     
-    session_id = user_data['session_id']
-    phone = user_data['phone_number']
+    # Получаем аккаунты
+    if not selected_accounts:
+        accounts = db.get_user_accounts(user_id)
+        selected_accounts = [acc['id'] for acc in accounts]
     
-    connect_result = await userbot_manager.connect_session(phone, session_id)
-    if not connect_result['success']:
-        await query.edit_message_text("❌ Не удалось подключиться к аккаунту")
+    if not selected_accounts:
+        await query.edit_message_text("❌ Нет активных аккаунтов")
         return ConversationHandler.END
     
-    sent = 0
-    errors = 0
-    joined = 0
-    already_member = 0
-    skipped_users = 0
-    no_permission = 0
+    accounts_data = [db.get_account(acc_id) for acc_id in selected_accounts]
+    accounts_data = [acc for acc in accounts_data if acc]
+    
+    if not accounts_data:
+        await query.edit_message_text("❌ Не удалось загрузить аккаунты")
+        return ConversationHandler.END
     
     await query.edit_message_text(
         f"📨 *Рассылка запущена!*\n\n"
-        f"🔄 Фаза 1: Вступление в группы...\n"
-        f"Получателей: {len(targets)}",
+        f"👥 Аккаунтов: {len(accounts_data)}\n"
+        f"🎯 Чатов: {len(targets)}\n"
+        f"📊 На аккаунт: ~{len(targets) // len(accounts_data)}",
         parse_mode='Markdown'
     )
     
-    # Фаза 1: Вступление в группы/каналы
-    for idx, target in enumerate(targets, 1):
-        try:
-            join_result = await userbot_manager.join_chat(
-                session_id=session_id,
-                phone=phone,
-                target=target
-            )
-            
-            if join_result.get('success'):
-                if join_result.get('joined'):
-                    joined += 1
-                elif join_result.get('already_member'):
-                    already_member += 1
-                elif join_result.get('is_user'):
-                    skipped_users += 1
-            
-            if idx % 3 == 0 or idx == len(targets):
-                try:
-                    await query.edit_message_text(
-                        f"🔄 *Фаза 1: Вступление*\n\n"
-                        f"✅ Вступили: {joined}\n"
-                        f"👥 Уже участник: {already_member}\n"
-                        f"👤 Личных аккаунтов: {skipped_users}\n"
-                        f"📊 Проверено: {idx}/{len(targets)}",
-                        parse_mode='Markdown'
-                    )
-                except:
-                    pass
-            
-            # Задержка между вступлениями
-            if idx < len(targets):
-                await asyncio.sleep(2)
-        
-        except Exception as e:
-            logger.error(f"Error joining {target}: {e}")
+    # Распределяем таргеты по аккаунтам
+    targets_per_account = len(targets) // len(accounts_data)
+    remainder = len(targets) % len(accounts_data)
     
-    # ВАЖНО: Большая пауза после вступления
-    logger.info("⏳ Waiting 10s for all permissions to update...")
+    total_sent = 0
+    total_errors = 0
+    
+    start_idx = 0
+    for idx, account in enumerate(accounts_data):
+        # Распределяем таргеты
+        end_idx = start_idx + targets_per_account + (1 if idx < remainder else 0)
+        account_targets = targets[start_idx:end_idx]
+        start_idx = end_idx
+        
+        if not account_targets:
+            continue
+        
+        await query.edit_message_text(
+            f"📨 *Рассылка:*\n\n"
+            f"🔄 Аккаунт {idx + 1}/{len(accounts_data)}\n"
+            f"📱 {account['account_name']}\n"
+            f"🎯 Чатов: {len(account_targets)}",
+            parse_mode='Markdown'
+        )
+        
+        # Запускаем рассылку для этого аккаунта
+        sent, errors = await run_single_account_mailing(
+            account, account_targets, mailing_message, context
+        )
+        
+        total_sent += sent
+        total_errors += errors
+        
+        # Задержка между аккаунтами
+        if idx < len(accounts_data) - 1:
+            await asyncio.sleep(10)
+    
+    success_rate = int((total_sent / len(targets)) * 100) if targets else 0
+    
+    await query.edit_message_text(
+        f"✅ *Рассылка завершена!*\n\n"
+        f"📊 *Статистика:*\n\n"
+        f"👥 Использовано аккаунтов: {len(accounts_data)}\n"
+        f"✅ Отправлено: {total_sent}/{len(targets)}\n"
+        f"❌ Ошибок: {total_errors}\n"
+        f"📈 Успешность: {success_rate}%",
+        parse_mode='Markdown',
+        reply_markup=get_main_menu_keyboard()
+    )
+    
+    context.user_data.clear()
+    return ConversationHandler.END
+
+async def run_single_account_mailing(account: dict, targets: list, mailing_message, context):
+    """Рассылка с одного аккаунта"""
+    session_id = account['session_id']
+    phone = account['phone_number']
+    user_id = account['user_id']
+    
+    connect_result = await userbot_manager.connect_session(phone, session_id)
+    if not connect_result['success']:
+        return 0, len(targets)
+    
+    sent = 0
+    errors = 0
+    
+    # Фаза 1: Вступление
+    for target in targets:
+        try:
+            await userbot_manager.join_chat(session_id, phone, target)
+            await asyncio.sleep(2)
+        except:
+            pass
+    
     await asyncio.sleep(10)
     
-    # Фаза 2: Отправка (БЕЗ предварительной проверки прав)
-    await query.edit_message_text(
-        f"📨 *Фаза 2: Отправка сообщений!*\n\n"
-        f"Получателей: {len(targets)}\n"
-        f"Отправлено: 0/{len(targets)}",
-        parse_mode='Markdown'
-    )
-    
-    for idx, target in enumerate(targets, 1):
+    # Фаза 2: Отправка
+    for target in targets:
         try:
-            # Пропускаем личные аккаунты (они были помечены при вступлении)
-            # Просто пытаемся отправить всем остальным
-            
             if mailing_message.text:
                 result = await userbot_manager.send_message(
-                    session_id=session_id,
-                    phone=phone,
-                    target=target,
-                    message=mailing_message.text
+                    session_id, phone, target, mailing_message.text
                 )
             elif mailing_message.photo:
                 photo = mailing_message.photo[-1]
@@ -1010,10 +963,7 @@ async def start_user_mailing(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 await file.download_to_drive(photo_path)
                 
                 result = await userbot_manager.send_photo(
-                    session_id=session_id,
-                    phone=phone,
-                    target=target,
-                    photo_path=photo_path,
+                    session_id, phone, target, photo_path,
                     caption=mailing_message.caption or ""
                 )
                 
@@ -1028,10 +978,7 @@ async def start_user_mailing(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 await file.download_to_drive(video_path)
                 
                 result = await userbot_manager.send_video(
-                    session_id=session_id,
-                    phone=phone,
-                    target=target,
-                    video_path=video_path,
+                    session_id, phone, target, video_path,
                     caption=mailing_message.caption or ""
                 )
                 
@@ -1042,484 +989,407 @@ async def start_user_mailing(update: Update, context: ContextTypes.DEFAULT_TYPE)
             if result.get('success'):
                 sent += 1
             else:
-                error_msg = result.get('error', '')
-                if 'permission' in error_msg.lower() or "can't write" in error_msg.lower():
-                    no_permission += 1
-                else:
-                    errors += 1
-                logger.error(f"Failed to send to {target}: {error_msg}")
+                errors += 1
             
-            if idx % 5 == 0 or idx == len(targets):
-                try:
-                    await query.edit_message_text(
-                        f"📨 *Рассылка в процессе...*\n\n"
-                        f"✅ Отправлено: {sent}/{len(targets)}\n"
-                        f"❌ Нет прав: {no_permission}\n"
-                        f"⚠️ Других ошибок: {errors}\n"
-                        f"⏱️ Осталось ~{int((len(targets) - idx) * 5)}s",
-                        parse_mode='Markdown'
-                    )
-                except:
-                    pass
+            await asyncio.sleep(5)
             
-            # ВАЖНАЯ задержка между сообщениями
-            if idx < len(targets):
-                await asyncio.sleep(5)
-        
         except Exception as e:
             errors += 1
-            logger.error(f"Error sending to {target}: {e}")
-    
-    message_text = mailing_message.text or mailing_message.caption or "[Медиа]"
-    db.add_mailing(user_id, message_text, sent, errors + no_permission)
-    
-    success_rate = int((sent / len(targets)) * 100) if targets else 0
-    
-    await query.edit_message_text(
-        f"✅ *Рассылка завершена!*\n\n"
-        f"📊 *Статистика:*\n\n"
-        f"🔗 *Подписки:*\n"
-        f"• Вступили: {joined}\n"
-        f"• Уже участник: {already_member}\n"
-        f"• Личных: {skipped_users}\n\n"
-        f"📮 *Рассылка:*\n"
-        f"• Отправлено: {sent}\n"
-        f"• Нет прав: {no_permission}\n"
-        f"• Других ошибок: {errors}\n"
-        f"• Успешность: {success_rate}%\n\n"
-        f"📋 Всего: {len(targets)}",
-        parse_mode='Markdown',
-        reply_markup=get_main_menu_keyboard()
-    )
-    
-    context.user_data.clear()
-    return ConversationHandler.END
-
-
-async def cancel_user_mailing(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Отмена рассылки"""
-    query = update.callback_query
-    await query.answer()
-    
-    context.user_data.clear()
-    await query.edit_message_text("❌ Рассылка отменена", reply_markup=get_main_menu_keyboard())
-    return ConversationHandler.END
-
-
-# ============= РАССЫЛКА АДМИНА =============
-
-async def start_admin_mailing(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Начало рассылки админа"""
-    query = update.callback_query
-    await query.answer()
-    
-    user_id = update.effective_user.id
-    
-    if user_id != ADMIN_ID:
-        await query.answer("❌ Доступно только администратору!", show_alert=True)
-        return ConversationHandler.END
-    
-    await query.edit_message_text(
-        "📮 *Рассылка всем пользователям*\n\n"
-        "Отправьте сообщение:\n"
-        "• Текст\n"
-        "• Фото с подписью\n"
-        "• Видео с подписью\n\n"
-        "Это получат ВСЕ пользователи бота!\n\n"
-        "Команда /cancel для отмены",
-        parse_mode='Markdown'
-    )
-    return ADMIN_MAILING_MESSAGE
-
-
-async def receive_admin_mailing_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Получение сообщения админа"""
-    user_id = update.effective_user.id
-    
-    if user_id != ADMIN_ID:
-        return ConversationHandler.END
-    
-    context.user_data['admin_mailing_message'] = update.message
-    users = db.get_all_users()
-    
-    keyboard = [
-        [
-            InlineKeyboardButton("✅ Отправить всем", callback_data="confirm_admin_mailing"),
-            InlineKeyboardButton("❌ Отменить", callback_data="cancel_admin_mailing")
-        ]
-    ]
-    
-    await update.message.reply_text(
-        f"📮 *Предпросмотр рассылки*\n\n"
-        f"👥 Получателей: {len(users)}\n"
-        f"⏱️ Задержка: {MAILING_DELAY}s\n"
-        f"⏱️ Примерное время: ~{int(len(users) * MAILING_DELAY / 60)} мин\n\n"
-        f"Отправить всем?",
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode='Markdown'
-    )
-    
-    return ADMIN_MAILING_CONFIRM
-
-
-async def confirm_admin_mailing(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Подтверждение рассылки админа"""
-    query = update.callback_query
-    await query.answer()
-    
-    user_id = update.effective_user.id
-    
-    if user_id != ADMIN_ID:
-        await query.answer("❌ Доступ запрещён", show_alert=True)
-        return ConversationHandler.END
-    
-    mailing_message = context.user_data.get('admin_mailing_message')
-    
-    if not mailing_message:
-        await query.edit_message_text("❌ Сообщение не найдено")
-        return ConversationHandler.END
-    
-    users = db.get_all_users()
-    total = len(users)
-    sent = 0
-    errors = 0
-    
-    await query.edit_message_text(
-        f"📮 *Рассылка запущена!*\n\nОтправлено: 0/{total}",
-        parse_mode='Markdown'
-    )
-    
-    for idx, user in enumerate(users, 1):
-        try:
-            if mailing_message.text:
-                await context.bot.send_message(
-                    chat_id=user['telegram_id'],
-                    text=mailing_message.text
-                )
-            elif mailing_message.photo:
-                await context.bot.send_photo(
-                    chat_id=user['telegram_id'],
-                    photo=mailing_message.photo[-1].file_id,
-                    caption=mailing_message.caption
-                )
-            elif mailing_message.video:
-                await context.bot.send_video(
-                    chat_id=user['telegram_id'],
-                    video=mailing_message.video.file_id,
-                    caption=mailing_message.caption
-                )
-            
-            sent += 1
-            
-            if idx % 10 == 0 or idx == total:
-                try:
-                    await query.edit_message_text(
-                        f"📮 *Рассылка в процессе...*\n\n"
-                        f"✅ Отправлено: {sent}/{total}\n"
-                        f"❌ Ошибок: {errors}\n"
-                        f"⏱️ Осталось ~{int((total - idx) * MAILING_DELAY)}s",
-                        parse_mode='Markdown'
-                    )
-                except:
-                    pass
-            
-            if idx < total:
-                await asyncio.sleep(MAILING_DELAY)
-        
-        except Exception as e:
-            errors += 1
-            logger.error(f"Error sending to {user['telegram_id']}: {e}")
+            logger.error(f"Error: {e}")
     
     message_text = mailing_message.text or mailing_message.caption or "[Медиа]"
     db.add_mailing(user_id, message_text, sent, errors)
     
-    await query.edit_message_text(
-        f"✅ *Рассылка завершена!*\n\n"
-        f"📊 Статистика:\n"
-        f"✅ Отправлено: {sent}\n"
-        f"❌ Ошибок: {errors}\n"
-        f"👥 Всего: {total}",
-        parse_mode='Markdown'
-    )
-    
-    context.user_data.clear()
-    return ConversationHandler.END
+    return sent, errors
 
+# ==================== ИСТОРИЯ РАССЫЛОК ====================
 
-async def cancel_admin_mailing(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Отмена рассылки админа"""
+async def mailing_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """История рассылок"""
     query = update.callback_query
     await query.answer()
     
-    context.user_data.clear()
-    await query.edit_message_text("❌ Рассылка отменена")
+    user_id = update.effective_user.id
+    mailings = db.get_user_mailings(user_id, limit=10)
+    
+    if not mailings:
+        keyboard = [[InlineKeyboardButton("◀️ Назад", callback_data='back_to_menu')]]
+        await query.edit_message_text(
+            "📊 История рассылок пуста",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        return
+    
+    history_text = "📊 *История рассылок:*\n\n"
+    
+    for idx, mailing in enumerate(mailings, 1):
+        message_preview = mailing['message'][:30] + "..." if len(mailing['message']) > 30 else mailing['message']
+        date = mailing['created_at'][:16]
+        
+        history_text += (
+            f"{idx}. 📅 {date}\n"
+            f"   📨 {message_preview}\n"
+            f"   ✅ Успешно: {mailing['sent_count']}\n"
+            f"   ❌ Ошибок: {mailing['error_count']}\n\n"
+        )
+    
+    keyboard = [[InlineKeyboardButton("◀️ Назад", callback_data='back_to_menu')]]
+    
+    await query.edit_message_text(
+        history_text,
+                reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode='Markdown'
+    )
+
+# ==================== ПОМОЩЬ ====================
+
+async def help_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Помощь"""
+    query = update.callback_query
+    await query.answer()
+    
+    help_text = """
+ℹ️ *Справка*
+
+*Как начать:*
+1. Добавьте Telegram аккаунт
+2. Создайте рассылку
+3. Выберите аккаунты
+4. Отправьте сообщение
+
+*Форматы ссылок:*
+• https://t.me/channel
+• @username
+• https://t.me/+invitehash
+
+*Ограничения:*
+• Задержка 5 сек между сообщениями
+• Автоматическое вступление в группы
+
+*Команды:*
+/start - Главное меню
+/cancel - Отмена операции
+/admin - Админ-панель (только для админа)
+
+*Поддержка:*
+Используйте кнопку "💬 Поддержка" в меню
+    """
+    
+    keyboard = [
+        [InlineKeyboardButton("💬 Поддержка", callback_data='support')],
+        [InlineKeyboardButton("◀️ Назад", callback_data='back_to_menu')]
+    ]
+    
+    await query.edit_message_text(
+        help_text,
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode='Markdown'
+    )
+
+# ==================== ПОДДЕРЖКА ====================
+
+async def support_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Начало обращения в поддержку"""
+    query = update.callback_query
+    await query.answer()
+    
+    await query.edit_message_text(
+        "💬 *Поддержка*\n\n"
+        "Опишите вашу проблему или вопрос.\n"
+        "Администратор получит ваше сообщение.\n\n"
+        "Или /cancel для отмены",
+        parse_mode='Markdown'
+    )
+    
+    return SUPPORT_MESSAGE
+
+async def support_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка сообщения в поддержку"""
+    message = update.message
+    user_id = update.effective_user.id
+    username = update.effective_user.username or "Без username"
+    
+    # Отправляем админу
+    try:
+        await context.bot.send_message(
+            chat_id=ADMIN_ID,
+            text=f"📩 *Новое обращение*\n\n"
+                 f"👤 От: {username} (ID: {user_id})\n\n"
+                 f"💬 Сообщение:\n{message.text}",
+            parse_mode='Markdown'
+        )
+        
+        await message.reply_text(
+            "✅ Ваше сообщение отправлено администратору!\n"
+            "Ожидайте ответа.",
+            reply_markup=get_main_menu_keyboard()
+        )
+    except Exception as e:
+        logger.error(f"Error sending to admin: {e}")
+        await message.reply_text(
+            "❌ Ошибка отправки. Попробуйте позже.",
+            reply_markup=get_main_menu_keyboard()
+        )
+    
     return ConversationHandler.END
 
-
-# ============= АДМИН CALLBACKS =============
+# ==================== АДМИНКА ====================
 
 async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Статистика для админа"""
     query = update.callback_query
     await query.answer()
     
-    user_id = update.effective_user.id
-    
-    if user_id != ADMIN_ID:
-        await query.answer("❌ Доступ запрещён", show_alert=True)
+    if update.effective_user.id != ADMIN_ID:
+        await query.answer("❌ Нет доступа", show_alert=True)
         return
     
     stats = db.get_stats()
     
     stats_text = f"""
-📊 *Детальная статистика:*
+📊 *Детальная статистика*
 
 👥 *Пользователи:*
 • Всего: {stats.get('total_users', 0)}
-• Активных подписок: {stats.get('active_subscriptions', 0)}
-• Новых сегодня: {stats.get('new_today', 0)}
-• Новых за неделю: {stats.get('new_week', 0)}
+• Активных: {stats.get('active_users', 0)}
+• Новых за сегодня: {stats.get('new_today', 0)}
 
-💰 *По тарифам:*
-• Любительская (499₽): {stats.get('amateur_users', 0)}
-• Профессиональная (1499₽): {stats.get('pro_users', 0)}
-• Премиум (4999₽): {stats.get('premium_users', 0)}
-• Пробная: {stats.get('trial_users', 0)}
+📱 *Аккаунты:*
+• Всего подключено: {stats.get('total_accounts', 0)}
+• Активных: {stats.get('active_accounts', 0)}
+
+📨 *Рассылки:*
+• Всего: {stats.get('total_mailings', 0)}
+• За сегодня: {stats.get('mailings_today', 0)}
+• Сообщений отправлено: {stats.get('total_sent', 0)}
+
+⏰ *Запланировано:*
+• Рассылок: {stats.get('total_scheduled', 0)}
     """
     
-    keyboard = [[InlineKeyboardButton("◀️ Назад", callback_data="back_to_admin")]]
+    keyboard = [[InlineKeyboardButton("◀️ Назад", callback_data='admin_menu')]]
     
     await query.edit_message_text(
         stats_text,
-        parse_mode='Markdown',
-        reply_markup=InlineKeyboardMarkup(keyboard)
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode='Markdown'
     )
 
-
-async def admin_users_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def admin_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Список пользователей"""
     query = update.callback_query
     await query.answer()
     
-    user_id = update.effective_user.id
-    
-    if user_id != ADMIN_ID:
-        await query.answer("❌ Доступ запрещён", show_alert=True)
+    if update.effective_user.id != ADMIN_ID:
+        await query.answer("❌ Нет доступа", show_alert=True)
         return
     
-    users = db.get_all_users()
+    users = db.get_all_users(limit=10)
     
     if not users:
-        await query.edit_message_text(
-            "ℹ️ Пользователей нет",
-            reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("◀️ Назад", callback_data="back_to_admin")
-            ]])
-        )
+        await query.edit_message_text("👥 Пользователей нет")
         return
     
-    users_text = f"👥 *Всего пользователей: {len(users)}*\n\n"
+    users_text = "👥 *Последние пользователи:*\n\n"
     
-    for idx, user in enumerate(users[:15], 1):
-        plan_info = SUBSCRIPTIONS.get(user['subscription_plan'], SUBSCRIPTIONS['trial'])
-        active = "✅" if user['subscription_end'] > datetime.now() else "❌"
+    for idx, user in enumerate(users, 1):
+        username = user.get('username') or 'Без username'
+        accounts_count = len(db.get_user_accounts(user['user_id']))
         
-        users_text += f"{idx}. {active} `{user['telegram_id']}`\n"
-        users_text += f"   👤 {user['first_name']}\n"
-        users_text += f"   📦 {plan_info['name']}\n"
-        users_text += f"   ⏰ До {user['subscription_end'].strftime('%d.%m.%Y')}\n\n"
+        users_text += (
+            f"{idx}. {username} (ID: {user['user_id']})\n"
+            f"   📱 Аккаунтов: {accounts_count}\n"
+            f"   📅 Регистрация: {user['created_at'][:10]}\n\n"
+        )
     
-    if len(users) > 15:
-        users_text += f"\n_...и ещё {len(users) - 15} пользователей_"
-    
-    keyboard = [[InlineKeyboardButton("◀️ Назад", callback_data="back_to_admin")]]
+    keyboard = [[InlineKeyboardButton("◀️ Назад", callback_data='admin_menu')]]
     
     await query.edit_message_text(
         users_text,
-        parse_mode='Markdown',
-        reply_markup=InlineKeyboardMarkup(keyboard)
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode='Markdown'
     )
 
-
-async def admin_payments_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Список платежей для подтверждения"""
+async def admin_mailing_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Начало админской рассылки"""
     query = update.callback_query
     await query.answer()
     
-    user_id = update.effective_user.id
-    
-    if user_id != ADMIN_ID:
-        await query.answer("❌ Доступ запрещён", show_alert=True)
-        return
-    
-    payments = db.get_payments()
-    pending_payments = [p for p in payments if p['status'] == 'pending']
-    
-    if not pending_payments:
-        await query.edit_message_text(
-            "ℹ️ Нет платежей ожидающих подтверждения",
-            reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("◀️ Назад", callback_data="back_to_admin")
-            ]])
-        )
-        return
-    
-    payments_text = "💰 *Платежи ожидающие подтверждения:*\n\n"
-    keyboard = []
-    
-    for payment in pending_payments:
-        user_data = db.get_user(payment['user_id'])
-        plan_info = SUBSCRIPTIONS.get(payment['plan'], SUBSCRIPTIONS['trial'])
-        
-        if user_data:
-            payments_text += f"👤 {user_data['first_name']} (`{payment['user_id']}`)\n"
-            payments_text += f"💎 {plan_info['name']} - {payment['amount']}₽\n"
-            payments_text += f"📅 {payment['created_at'].strftime('%d.%m.%Y %H:%M')}\n\n"
-            
-            keyboard.append([
-                InlineKeyboardButton(
-                    f"✅ Подтвердить {user_data['first_name']} - {plan_info['name']}",
-                    callback_data=f"confirm_pay_{payment['id']}_{payment['user_id']}_{payment['plan']}"
-                )
-            ])
-    
-    keyboard.append([InlineKeyboardButton("◀️ Назад", callback_data="back_to_admin")])
+    if update.effective_user.id != ADMIN_ID:
+        await query.answer("❌ Нет доступа", show_alert=True)
+        return ConversationHandler.END
     
     await query.edit_message_text(
-        payments_text,
-        parse_mode='Markdown',
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
-
-
-async def confirm_payment_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Подтверждение платежа"""
-    query = update.callback_query
-    await query.answer()
-    
-    user_id = update.effective_user.id
-    
-    if user_id != ADMIN_ID:
-        await query.answer("❌ Доступ запрещён", show_alert=True)
-        return
-    
-    data_parts = query.data.split('_')
-    payment_id = int(data_parts[2])
-    target_user_id = int(data_parts[3])
-    plan_id = data_parts[4]
-    
-    plan_info = SUBSCRIPTIONS.get(plan_id, SUBSCRIPTIONS['trial'])
-    new_end_date = datetime.now() + timedelta(days=plan_info['duration'])
-    
-    db.update_user(
-        telegram_id=target_user_id,
-        subscription_plan=plan_id,
-        subscription_end=new_end_date
-    )
-    
-    db.update_payment_status(payment_id, 'confirmed')
-    
-    try:
-        await context.bot.send_message(
-            chat_id=target_user_id,
-            text=f"✅ *Оплата подтверждена!*\n\n"
-                 f"💎 Подписка: {plan_info['name']}\n"
-                 f"⏰ Действует до: {new_end_date.strftime('%d.%m.%Y %H:%M')}\n\n"
-                 f"📋 *Ваши лимиты:*\n"
-                 f"• Аккаунтов: {plan_info['accounts_limit']}\n"
-                 f"• Сообщений в день: {plan_info['messages_limit']}\n"
-                 f"• Срок: {plan_info['duration']} дней\n\n"
-                 f"Теперь можете:\n"
-                 f"• Подключить аккаунт через 🤖 Подключить аккаунт\n"
-                 f"• Начать рассылку через 📨 Начать рассылку\n\n"
-                 f"🔒 Для доступа к приватному каналу обратитесь к администратору",
-            parse_mode='Markdown',
-            reply_markup=get_main_menu_keyboard()
-        )
-    except Exception as e:
-        logger.error(f"Error notifying user {target_user_id}: {e}")
-    
-    await query.edit_message_text(
-        f"✅ Платёж подтверждён!\n\n"
-        f"👤 Пользователь: `{target_user_id}`\n"
-        f"💎 Тариф: {plan_info['name']}\n"
-        f"⏰ До: {new_end_date.strftime('%d.%m.%Y %H:%M')}",
-        parse_mode='Markdown',
-        reply_markup=InlineKeyboardMarkup([[
-            InlineKeyboardButton("◀️ Назад", callback_data="back_to_admin")
-        ]])
-    )
-
-
-async def admin_backup(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Создать бэкап из админ-панели"""
-    query = update.callback_query
-    await query.answer()
-    
-    user_id = update.effective_user.id
-    
-    if user_id != ADMIN_ID:
-        await query.answer("❌ Доступ запрещён", show_alert=True)
-        return
-    
-    await query.edit_message_text(
-        "🔄 *Создаю бэкап...*",
+        "📮 *Рассылка всем пользователям*\n\n"
+        "Отправьте сообщение для рассылки:\n"
+        "(текст, фото или видео)\n\n"
+        "Или /cancel для отмены",
         parse_mode='Markdown'
     )
     
-    success = await backup_scheduler.manual_backup()
-    
-    if success:
-        await query.edit_message_text(
-            "✅ *Бэкап создан успешно!*\n\n"
-            "📦 Файл отправлен вам в личные сообщения.\n"
-            "💾 Также сохранён на сервере.",
-            parse_mode='Markdown',
-            reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("◀️ Назад", callback_data="back_to_admin")
-            ]])
-        )
-    else:
-        await query.edit_message_text(
-            "❌ *Ошибка при создании бэкапа*\n\n"
-            "Проверьте логи сервера.",
-            parse_mode='Markdown',
-            reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("◀️ Назад", callback_data="back_to_admin")
-            ]])
-        )
+    return ADMIN_MAILING_MESSAGE
 
+async def admin_mailing_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Получение сообщения для админской рассылки"""
+    message = update.message
+    context.user_data['admin_mailing_message'] = message
+    
+    all_users = db.get_all_users()
+    users_count = len(all_users)
+    
+    preview = ""
+    if message.text:
+        preview = message.text[:100] + "..." if len(message.text) > 100 else message.text
+    elif message.photo:
+        preview = "[Фото]" + (f"\n{message.caption}" if message.caption else "")
+    elif message.video:
+        preview = "[Видео]" + (f"\n{message.caption}" if message.caption else "")
+    
+    keyboard = [
+        [InlineKeyboardButton("✅ Отправить", callback_data='admin_confirm_mailing')],
+        [InlineKeyboardButton("❌ Отмена", callback_data='back_to_menu')]
+    ]
+    
+    await message.reply_text(
+        f"📋 *Подтверждение рассылки*\n\n"
+        f"👥 Получателей: {users_count}\n"
+        f"📨 Сообщение:\n{preview}",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode='Markdown'
+    )
+    
+    return ADMIN_MAILING_CONFIRM
 
-async def manual_backup_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Команда /backup - ручной бэкап"""
-    user_id = update.effective_user.id
-    
-    if user_id != ADMIN_ID:
-        await update.message.reply_text("❌ У вас нет доступа")
-        return
-    
-    await update.message.reply_text("🔄 Создаю бэкап...")
-    
-    success = await backup_scheduler.manual_backup()
-    
-    if success:
-        await update.message.reply_text(
-            "✅ Бэкап создан!\n\n"
-            "Файл отправлен вам в личные сообщения."
-        )
-    else:
-        await update.message.reply_text("❌ Ошибка при создании бэкапа")
-
-
-async def back_to_admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Вернуться в админ-панель"""
+async def admin_mailing_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Подтверждение и запуск админской рассылки"""
     query = update.callback_query
     await query.answer()
     
-    user_id = update.effective_user.id
+    if update.effective_user.id != ADMIN_ID:
+        await query.answer("❌ Нет доступа", show_alert=True)
+        return ConversationHandler.END
     
-    if user_id != ADMIN_ID:
-        await query.answer("❌ Доступ запрещён", show_alert=True)
+    mailing_msg = context.user_data.get('admin_mailing_message')
+    if not mailing_msg:
+        await query.edit_message_text("❌ Сообщение не найдено")
+        return ConversationHandler.END
+    
+    all_users = db.get_all_users()
+    
+    await query.edit_message_text(
+        f"📮 Рассылка запущена!\n\n"
+        f"👥 Пользователей: {len(all_users)}"
+    )
+    
+    sent = 0
+    errors = 0
+    
+    for user in all_users:
+        try:
+            if mailing_msg.text:
+                await context.bot.send_message(
+                    chat_id=user['user_id'],
+                    text=mailing_msg.text
+                )
+            elif mailing_msg.photo:
+                await context.bot.send_photo(
+                    chat_id=user['user_id'],
+                    photo=mailing_msg.photo[-1].file_id,
+                    caption=mailing_msg.caption
+                )
+            elif mailing_msg.video:
+                await context.bot.send_video(
+                    chat_id=user['user_id'],
+                    video=mailing_msg.video.file_id,
+                    caption=mailing_msg.caption
+                )
+            
+            sent += 1
+            await asyncio.sleep(0.05)  # Защита от флуда
+            
+        except Exception as e:
+            errors += 1
+            logger.error(f"Error sending to {user['user_id']}: {e}")
+    
+    await query.edit_message_text(
+        f"✅ *Рассылка завершена!*\n\n"
+        f"✅ Отправлено: {sent}\n"
+        f"❌ Ошибок: {errors}",
+        parse_mode='Markdown',
+        reply_markup=get_admin_keyboard()
+    )
+    
+    context.user_data.clear()
+    return ConversationHandler.END
+
+async def admin_payments(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Ожидающие оплаты"""
+    query = update.callback_query
+    await query.answer()
+    
+    if update.effective_user.id != ADMIN_ID:
+        await query.answer("❌ Нет доступа", show_alert=True)
+        return
+    
+    # Заглушка - реализуй логику получения платежей из БД
+    await query.edit_message_text(
+        "💳 *Ожидающие оплаты*\n\n"
+        "Функция в разработке...",
+        parse_mode='Markdown',
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("◀️ Назад", callback_data='admin_menu')
+        ]])
+    )
+
+async def admin_backup(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Бэкап базы данных"""
+    query = update.callback_query
+    await query.answer()
+    
+    if update.effective_user.id != ADMIN_ID:
+        await query.answer("❌ Нет доступа", show_alert=True)
+        return
+    
+    try:
+        import shutil
+        from datetime import datetime
+        
+        # Создаем бэкап
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        backup_file = f"backup_{timestamp}.db"
+        shutil.copy('userbot_manager.db', backup_file)
+        
+        # Отправляем файл
+        with open(backup_file, 'rb') as f:
+            await context.bot.send_document(
+                chat_id=ADMIN_ID,
+                document=f,
+                filename=backup_file,
+                caption="💾 Бэкап базы данных"
+            )
+        
+        # Удаляем временный файл
+        os.remove(backup_file)
+        
+        await query.edit_message_text(
+            "✅ Бэкап создан и отправлен!",
+            reply_markup=get_admin_keyboard()
+        )
+        
+    except Exception as e:
+        logger.error(f"Backup error: {e}")
+        await query.edit_message_text(
+            f"❌ Ошибка создания бэкапа: {e}",
+            reply_markup=get_admin_keyboard()
+        )
+
+async def admin_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Возврат в админ меню"""
+    query = update.callback_query
+    await query.answer()
+    
+    if update.effective_user.id != ADMIN_ID:
+        await query.answer("❌ Нет доступа", show_alert=True)
         return
     
     stats = db.get_stats()
@@ -1529,13 +1399,9 @@ async def back_to_admin_callback(update: Update, context: ContextTypes.DEFAULT_T
 
 📊 *Статистика:*
 👥 Всего пользователей: {stats.get('total_users', 0)}
-💰 Активных подписок: {stats.get('active_subscriptions', 0)}
-📅 Новых за сегодня: {stats.get('new_today', 0)}
-
-💎 *По тарифам:*
-• Любительская: {stats.get('amateur_users', 0)}
-• Профессиональная: {stats.get('pro_users', 0)}
-• Премиум: {stats.get('premium_users', 0)}
+📱 Всего аккаунтов: {stats.get('total_accounts', 0)}
+📨 Всего рассылок: {stats.get('total_mailings', 0)}
+⏰ Запланировано: {stats.get('total_scheduled', 0)}
     """
     
     await query.edit_message_text(
@@ -1544,124 +1410,121 @@ async def back_to_admin_callback(update: Update, context: ContextTypes.DEFAULT_T
         parse_mode='Markdown'
     )
 
-
-# ============= CONVERSATION HANDLERS =============
-
-connect_conv = ConversationHandler(
-    entry_points=[CallbackQueryHandler(connect_start, pattern="^connect_userbot$")],
-    states={
-        PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_phone)],
-        CODE: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_code)],
-        PASSWORD: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_password)],
-    },
-    fallbacks=[CommandHandler("cancel", cancel)],
-)
-
-support_conv = ConversationHandler(
-    entry_points=[CallbackQueryHandler(support_start, pattern="^support$")],
-    states={
-        SUPPORT_MESSAGE: [
-            MessageHandler(filters.TEXT & ~filters.COMMAND, receive_support_message),
-            MessageHandler(filters.PHOTO, receive_support_message)
-        ],
-    },
-    fallbacks=[CommandHandler("cancel", cancel)],
-)
-
-payment_conv = ConversationHandler(
-    entry_points=[CallbackQueryHandler(payment_select_plan, pattern="^buy_")],
-    states={
-        PAYMENT_RECEIPT: [
-            CallbackQueryHandler(send_receipt_prompt, pattern="^send_receipt$"),
-            CallbackQueryHandler(cancel_payment, pattern="^cancel_payment$"),
-            MessageHandler(filters.PHOTO, receive_receipt)
-        ],
-    },
-    fallbacks=[CommandHandler("cancel", cancel)],
-)
-
-user_mailing_conv = ConversationHandler(
-    entry_points=[CallbackQueryHandler(user_mailing_start, pattern="^start_mailing$")],
-    states={
-        USER_MAILING_TARGETS: [
-            MessageHandler(filters.TEXT & ~filters.COMMAND, receive_mailing_targets)
-        ],
-        USER_MAILING_MESSAGE: [
-            MessageHandler(
-                (filters.TEXT | filters.PHOTO | filters.VIDEO) & ~filters.COMMAND,
-                receive_user_mailing_message
-            )
-        ],
-        USER_MAILING_CONFIRM: [
-            CallbackQueryHandler(start_user_mailing, pattern="^start_user_mailing$"),
-            CallbackQueryHandler(cancel_user_mailing, pattern="^cancel_user_mailing$")
-        ],
-    },
-    fallbacks=[CommandHandler("cancel", cancel)],
-)
-
-admin_mailing_conv = ConversationHandler(
-    entry_points=[CallbackQueryHandler(start_admin_mailing, pattern="^admin_mailing$")],
-    states={
-        ADMIN_MAILING_MESSAGE: [
-            MessageHandler((filters.TEXT | filters.PHOTO | filters.VIDEO) & ~filters.COMMAND, receive_admin_mailing_message)
-        ],
-        ADMIN_MAILING_CONFIRM: [
-            CallbackQueryHandler(confirm_admin_mailing, pattern="^confirm_admin_mailing$"),
-            CallbackQueryHandler(cancel_admin_mailing, pattern="^cancel_admin_mailing$"),
-        ],
-    },
-    fallbacks=[CommandHandler("cancel", cancel)],
-)
-
-
-# ============= ГЛАВНАЯ ФУНКЦИЯ =============
+# ==================== MAIN ====================
 
 def main():
     """Запуск бота"""
     application = Application.builder().token(MANAGER_BOT_TOKEN).build()
     
-    # Команды
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("admin", admin_panel))
+    # ==================== ConversationHandlers ====================
     
-    # ConversationHandlers
-    application.add_handler(connect_conv)
-    application.add_handler(support_conv)
-    application.add_handler(payment_conv)
-    application.add_handler(user_mailing_conv)
-    application.add_handler(admin_mailing_conv)
-    
-    # Callbacks
-    application.add_handler(CallbackQueryHandler(check_subscription_callback, pattern="^check_subscription$"))
-    application.add_handler(CallbackQueryHandler(my_status_callback, pattern="^my_status$"))
-    application.add_handler(CallbackQueryHandler(view_tariffs_callback, pattern="^view_tariffs$"))
-    application.add_handler(CallbackQueryHandler(back_to_menu_callback, pattern="^back_to_menu$"))
-    
-    # Админ callbacks
-    application.add_handler(CallbackQueryHandler(admin_stats, pattern="^admin_stats$"))
-    application.add_handler(CallbackQueryHandler(admin_users_list, pattern="^admin_users$"))
-    application.add_handler(CallbackQueryHandler(admin_payments_callback, pattern="^admin_payments$"))
-    application.add_handler(CallbackQueryHandler(confirm_payment_admin, pattern="^confirm_pay_"))
-    application.add_handler(CallbackQueryHandler(admin_backup, pattern="^admin_backup$"))
-    application.add_handler(CallbackQueryHandler(back_to_admin_callback, pattern="^back_to_admin$"))
-    test_conv = ConversationHandler(
-        entry_points=[CommandHandler("test", test_send_command)],
+    # Подключение аккаунта
+    connect_conv_handler = ConversationHandler(
+        entry_points=[CallbackQueryHandler(connect_start, pattern='^connect_userbot$')],
         states={
-            'test_target': [MessageHandler(filters.TEXT & ~filters.COMMAND, test_target_received)],
-            'test_message': [MessageHandler(filters.TEXT & ~filters.COMMAND, test_message_received)],
+            PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_phone)],
+            CODE: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_code)],
+            PASSWORD: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_password)],
         },
-        fallbacks=[CommandHandler("cancel", cancel)]
+        fallbacks=[CommandHandler('cancel', cancel)]
     )
-    application.add_handler(test_conv)
-   
-    loop = asyncio.get_event_loop()
-    loop.create_task(backup_scheduler.run_daily_backup())
     
-    logger.info("🚀 Manager Bot started!")
-    logger.info(f"👤 Admin ID: {ADMIN_ID}")
-    logger.info(f"⏰ Auto-backup scheduled at 23:55 daily")
+    # Рассылка пользователя
+    user_mailing_handler = ConversationHandler(
+        entry_points=[CallbackQueryHandler(start_mailing, pattern='^start_mailing$')],
+        states={
+            USER_MAILING_TARGETS: [MessageHandler(filters.TEXT & ~filters.COMMAND, mailing_targets_received)],
+            USER_MAILING_MESSAGE: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, mailing_message_received),
+                MessageHandler(filters.PHOTO, mailing_message_received),
+                MessageHandler(filters.VIDEO, mailing_message_received),
+                CallbackQueryHandler(use_all_accounts, pattern='^use_all_accounts$'),
+                CallbackQueryHandler(select_accounts_for_mailing, pattern='^select_accounts$')
+            ],
+            USER_MAILING_CONFIRM: [
+                CallbackQueryHandler(start_user_mailing, pattern='^confirm_mailing$'),
+                CallbackQueryHandler(cancel_mailing, pattern='^cancel_mailing$')
+            ]
+        },
+        fallbacks=[CommandHandler('cancel', cancel)]
+    )
     
+    # Админская рассылка
+    admin_mailing_handler = ConversationHandler(
+        entry_points=[CallbackQueryHandler(admin_mailing_start, pattern='^admin_mailing$')],
+        states={
+            ADMIN_MAILING_MESSAGE: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, admin_mailing_message),
+                MessageHandler(filters.PHOTO, admin_mailing_message),
+                MessageHandler(filters.VIDEO, admin_mailing_message)
+            ],
+            ADMIN_MAILING_CONFIRM: [
+                CallbackQueryHandler(admin_mailing_confirm, pattern='^admin_confirm_mailing$'),
+                CallbackQueryHandler(back_to_menu_callback, pattern='^back_to_menu$')
+            ]
+        },
+        fallbacks=[CommandHandler('cancel', cancel)]
+    )
+    
+    # Поддержка
+    support_handler = ConversationHandler(
+        entry_points=[CallbackQueryHandler(support_start, pattern='^support$')],
+        states={
+            SUPPORT_MESSAGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, support_message)]
+        },
+        fallbacks=[CommandHandler('cancel', cancel)]
+    )
+    
+    # ==================== Команды ====================
+    application.add_handler(CommandHandler('start', start))
+    application.add_handler(CommandHandler('admin', admin_panel))
+    application.add_handler(CommandHandler('cancel', cancel))
+    
+    # ==================== ConversationHandlers ====================
+    application.add_handler(connect_conv_handler)
+    application.add_handler(user_mailing_handler)
+    application.add_handler(admin_mailing_handler)
+    application.add_handler(support_handler)
+    
+    # ==================== Callback Handlers ====================
+    
+    # Главное меню
+    application.add_handler(CallbackQueryHandler(back_to_menu_callback, pattern='^back_to_menu$'))
+    application.add_handler(CallbackQueryHandler(check_subscription_callback, pattern='^check_subscription$'))
+    
+    # Аккаунты
+    application.add_handler(CallbackQueryHandler(accounts_menu, pattern='^accounts_menu$'))
+    application.add_handler(CallbackQueryHandler(account_detail, pattern='^account_\d+$'))
+    application.add_handler(CallbackQueryHandler(delete_account_confirm, pattern='^delete_account_\d+$'))
+    application.add_handler(CallbackQueryHandler(confirm_delete_account, pattern='^confirm_delete_\d+$'))
+    
+    # Планировщик
+    application.add_handler(CallbackQueryHandler(schedule_mailing_menu, pattern='^schedule_menu$'))
+    application.add_handler(CallbackQueryHandler(my_schedules, pattern='^my_schedules$'))
+    application.add_handler(CallbackQueryHandler(schedule_detail, pattern='^schedule_detail_\d+$'))
+    application.add_handler(CallbackQueryHandler(delete_schedule, pattern='^delete_schedule_\d+$'))
+    
+    # Выбор аккаунтов
+    application.add_handler(CallbackQueryHandler(toggle_account_selection, pattern='^toggle_account_\d+$'))
+    application.add_handler(CallbackQueryHandler(select_all_accounts, pattern='^select_all_accounts$'))
+    application.add_handler(CallbackQueryHandler(deselect_all_accounts, pattern='^deselect_all_accounts$'))
+    application.add_handler(CallbackQueryHandler(continue_with_selected, pattern='^continue_with_selected$'))
+    
+    # История рассылок
+    application.add_handler(CallbackQueryHandler(mailing_history, pattern='^mailing_history$'))
+    
+    # Помощь
+    application.add_handler(CallbackQueryHandler(help_callback, pattern='^help$'))
+    
+    # Админка
+    application.add_handler(CallbackQueryHandler(admin_stats, pattern='^admin_stats$'))
+    application.add_handler(CallbackQueryHandler(admin_users, pattern='^admin_users$'))
+    application.add_handler(CallbackQueryHandler(admin_payments, pattern='^admin_payments$'))
+    application.add_handler(CallbackQueryHandler(admin_backup, pattern='^admin_backup$'))
+    application.add_handler(CallbackQueryHandler(admin_menu_callback, pattern='^admin_menu$'))
+    
+    # Запуск
+    logger.info("🤖 Bot starting...")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
