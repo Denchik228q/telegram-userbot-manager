@@ -462,6 +462,84 @@ class UserbotManager:
                 entity = await client.get_entity(target_clean)
                 logger.info(f"✅ Entity found: {entity.__class__.__name__}")
                 
-                await client.send_file(entity, photo_path, caption=caption)
+                                await client.send_file(entity, photo_path, caption=caption)
                 logger.info(f"✅ Photo sent to {target_clean}")
                 return {'success': True}
+                
+            except Exception as send_err:
+                logger.error(f"❌ Send photo error for {target_clean}: {send_err}")
+                return {'success': False, 'error': str(send_err)}
+                
+        except Exception as e:
+            logger.error(f"❌ Fatal error: {e}")
+            return {'success': False, 'error': str(e)}
+    
+    async def send_video(self, session_id: str, phone: str, target: str, video_path: str, caption: str = ""):
+        """Отправка видео"""
+        try:
+            client = self.sessions.get(session_id)
+            if not client or not client.is_connected():
+                connect_result = await self.connect_session(phone, session_id)
+                if not connect_result['success']:
+                    return {'success': False, 'error': 'Session not connected'}
+                client = connect_result['client']
+            
+            # Пропускаем инвайт-ссылки
+            if 't.me/+' in target or 't.me/joinchat/' in target:
+                logger.warning(f"⚠️ Cannot send to invite link")
+                return {'success': False, 'error': 'Cannot send to invite links'}
+            
+            target_clean = target
+            if target_clean.startswith('https://t.me/'):
+                target_clean = target_clean.replace('https://t.me/', '')
+            if target_clean.startswith('http://t.me/'):
+                target_clean = target_clean.replace('http://t.me/', '')
+            if target_clean.startswith('@'):
+                target_clean = target_clean[1:]
+            if '?' in target_clean:
+                target_clean = target_clean.split('?')[0]
+            
+            logger.info(f"🔄 Attempting to send video to: {target_clean}")
+            
+            try:
+                entity = await client.get_entity(target_clean)
+                logger.info(f"✅ Entity found: {entity.__class__.__name__}")
+                
+                await client.send_file(entity, video_path, caption=caption)
+                logger.info(f"✅ Video sent to {target_clean}")
+                return {'success': True}
+                
+            except Exception as send_err:
+                logger.error(f"❌ Send video error for {target_clean}: {send_err}")
+                return {'success': False, 'error': str(send_err)}
+                
+        except Exception as e:
+            logger.error(f"❌ Fatal error: {e}")
+            return {'success': False, 'error': str(e)}
+    
+    async def disconnect_session(self, session_id: str):
+        """Отключение сессии"""
+        try:
+            if session_id in self.sessions:
+                client = self.sessions[session_id]
+                await client.disconnect()
+                del self.sessions[session_id]
+                logger.info("✅ Session disconnected")
+                return True
+            return False
+        except Exception as e:
+            logger.error(f"❌ Error: {e}")
+            return False
+    
+    async def disconnect_all(self):
+        """Отключение всех сессий"""
+        try:
+            for session_id, client in list(self.sessions.items()):
+                try:
+                    await client.disconnect()
+                except:
+                    pass
+            self.sessions.clear()
+            logger.info("✅ All sessions disconnected")
+        except Exception as e:
+            logger.error(f"❌ Error: {e}")
