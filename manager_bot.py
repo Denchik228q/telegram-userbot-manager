@@ -2,12 +2,13 @@
 # -*- coding: utf-8 -*-
 
 """
-Telegram Manager Bot - Complete Version
+Telegram Manager Bot - Complete Version with Subscriptions
 """
 
 import logging
 import asyncio
 import os
+import shutil
 from datetime import datetime, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -58,13 +59,17 @@ USER_MAILING_TARGETS, USER_MAILING_MESSAGE, USER_MAILING_CONFIRM = 200, 201, 202
 
 # ==================== КЛАВИАТУРЫ ====================
 
-def get_main_menu_keyboard():
+def get_main_menu_keyboard(user_id: int = None):
     """Клавиатура главного меню"""
     keyboard = [
         [InlineKeyboardButton("📨 Новая рассылка", callback_data='start_mailing')],
         [InlineKeyboardButton("⏰ Планировщик", callback_data='schedule_menu')],
         [InlineKeyboardButton("📱 Мои аккаунты", callback_data='accounts_menu')],
         [InlineKeyboardButton("📊 История рассылок", callback_data='mailing_history')],
+        [
+            InlineKeyboardButton("👤 Мой статус", callback_data='my_status'),
+            InlineKeyboardButton("💎 Тарифы", callback_data='view_tariffs')
+        ],
         [InlineKeyboardButton("ℹ️ Помощь", callback_data='help')]
     ]
     return InlineKeyboardMarkup(keyboard)
@@ -99,8 +104,85 @@ async def check_subscription(user_id: int, context: ContextTypes.DEFAULT_TYPE) -
             return False
     except Exception as e:
         logger.error(f"Error checking subscription: {e}")
-        return True  # В случае ошибки разрешаем доступ
+        return True
     return True
+
+def check_user_limits(user_id: int, action: str = 'account') -> dict:
+    """Проверка лимитов пользователя"""
+    user_data = db.get_user(user_id)
+    
+    if not user_data:
+        return {'allowed': False, 'reason': 'Пользователь не найден'}
+    
+    # Проверка активности подписки
+    if user_data['subscription_end'] < datetime.now():
+        return {'allowed': False, 'reason': 'Подписка истекла'}
+    
+    plan = SUBSCRIPTIONS.get(user_data['subscription_plan'])
+    if not plan:
+        return {'allowed': False, 'reason': 'Неизвестный тариф'}
+    
+    if action == 'account':
+        # Проверка лимита аккаунтов
+        accounts = db.get_user_accounts(user_id)
+        max_accounts = plan.get('max_accounts', 1)
+        
+        if max_accounts != -1 and len(accounts) >= max_accounts:
+            return {
+                'allowed': False,
+                'reason': f'Достигнут лимит аккаунтов ({max_accounts})\nОбновите тариф'
+            }
+    
+    elif action == 'mailing':
+        # Проверка лимита рассылок
+        today_mailings = db.get_user_mailings_today(user_id)
+        max_mailings = plan.get('max_mailings_per_day', 5)
+        
+        if max_mailings != -1 and today_mailings >= max_mailings:
+            return {
+                'allowed': False,
+                'reason': f'Достигнут дневной лимит рассылок ({max_mailings})\nОбновите тариф'
+            }
+    
+    return {'allowed': True}
+
+def get_user_status_text(user_id: int) -> str:
+    """Получить текст статуса пользователя"""
+    user_data = db.get_user(user_id)
+    
+    if not user_data:
+        return "❌ Данные не найдены"
+    
+    plan = SUBSCRIPTIONS.get(user_data['subscription_plan'], SUBSCRIPTIONS['trial'])
+    subscription_active = user_data['subscription_end'] > datetime.now()
+    
+    days_left = (user_data['subscription_end'] - datetime.now()).days
+    
+    accounts = db.get_user_accounts(user_id)
+    today_mailings = db.get_user_mailings_today(user_id)
+    
+    max_accounts = plan.get('max_accounts', 1)
+    max_mailings = plan.get('max_mailings_per_day', 5)
+    
+    accounts_text = f"{len(accounts)}/{max_accounts if max_accounts != -1 else '∞'}"
+    mailings_text = f"{today_mailings}/{max_mailings if max_mailings != -1 else '∞'}"
+    
+    status_emoji = "✅" if subscription_active else "❌"
+    
+    text = f"""
+📊 *Ваш статус*
+
+👤 ID: `{user_id}`
+📦 Тариф: {plan['name']}
+{status_emoji} Статус: {'Активна' if subscription_active else 'Истекла'}
+⏰ Осталось дней: {days_left if days_left > 0 else 0}
+📅 Действует до: {user_data['subscription_end'].strftime('%d.%m.%Y %H:%M')}
+
+📱 Аккаунтов: {accounts_text}
+📨 Рассылок сегодня: {mailings_text}
+    """
+    
+    return text
 
 # ==================== КОМАНДЫ ====================
 
@@ -109,36 +191,65 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     username = update.effective_user.username
     
+    # Добавляем пользователя (с триальным периодом)
     db.add_user(user_id, username)
     
-    # Проверяем аккаунты
+    # Проверяем подписку на канал
+    is_subscribed = await check_subscription(user_id, context)
+    
+    if not is_subscribed:
+        if update.message:
+            await update.message.reply_text(
+                f"👋 Добро пожаловать!\n\n"
+                f"Для использования бота подпишитесь на наш канал:",
+                reply_markup=get_subscription_keyboard()
+            )
+        else:
+            query = update.callback_query
+            await query.edit_message_text(
+                f"👋 Добро пожаловать!\n\n"
+                f"Для использования бота подпишитесь на наш канал:",
+                reply_markup=get_subscription_keyboard()
+            )
+        return
+    
+    # Получаем статус пользователя
+    user_data = db.get_user(user_id)
     accounts = db.get_user_accounts(user_id)
+    
+    subscription_active = user_data['subscription_end'] > datetime.now()
+    days_left = (user_data['subscription_end'] - datetime.now()).days
+    
     accounts_text = f"📱 Аккаунтов: {len(accounts)}" if accounts else "⚠️ Аккаунты не добавлены"
+    
+    status_text = ""
+    if subscription_active:
+        if days_left <= 3:
+            status_text = f"\n⚠️ Подписка истекает через {days_left} дн."
+    else:
+        status_text = "\n❌ Подписка истекла! Обновите тариф."
+    
+    welcome_text = (
+        f"👋 Добро пожаловать в бот массовых рассылок!\n\n"
+        f"{accounts_text}{status_text}\n\n"
+        f"🎯 Возможности:\n"
+        f"• Рассылка в группы/каналы\n"
+        f"• Несколько аккаунтов\n"
+        f"• Планировщик рассылок\n"
+        f"• Автоматическое вступление\n\n"
+        f"Выберите действие:"
+    )
     
     if update.message:
         await update.message.reply_text(
-            f"👋 Добро пожаловать в бот массовых рассылок!\n\n"
-            f"{accounts_text}\n\n"
-            f"🎯 Возможности:\n"
-            f"• Рассылка в группы/каналы\n"
-            f"• Несколько аккаунтов\n"
-            f"• Планировщик рассылок\n"
-            f"• Автоматическое вступление\n\n"
-            f"Выберите действие:",
-            reply_markup=get_main_menu_keyboard()
+            welcome_text,
+            reply_markup=get_main_menu_keyboard(user_id)
         )
     else:
         query = update.callback_query
         await query.edit_message_text(
-            f"👋 Добро пожаловать в бот массовых рассылок!\n\n"
-            f"{accounts_text}\n\n"
-            f"🎯 Возможности:\n"
-            f"• Рассылка в группы/каналы\n"
-            f"• Несколько аккаунтов\n"
-            f"• Планировщик рассылок\n"
-            f"• Автоматическое вступление\n\n"
-            f"Выберите действие:",
-            reply_markup=get_main_menu_keyboard()
+            welcome_text,
+            reply_markup=get_main_menu_keyboard(user_id)
         )
 
 async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -156,9 +267,23 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 📊 *Статистика:*
 👥 Всего пользователей: {stats.get('total_users', 0)}
-📱 Всего аккаунтов: {stats.get('total_accounts', 0)}
-📨 Всего рассылок: {stats.get('total_mailings', 0)}
-⏰ Запланировано: {stats.get('total_scheduled', 0)}
+💰 Активных подписок: {stats.get('active_subscriptions', 0)}
+📅 Новых за сегодня: {stats.get('new_today', 0)}
+
+📱 *Аккаунты:*
+• Всего подключено: {stats.get('total_accounts', 0)}
+• Активных: {stats.get('active_accounts', 0)}
+
+📨 *Рассылки:*
+• Всего: {stats.get('total_mailings', 0)}
+• За сегодня: {stats.get('mailings_today', 0)}
+• Сообщений отправлено: {stats.get('total_sent', 0)}
+
+💎 *По тарифам:*
+• Пробный: {stats.get('trial_users', 0)}
+• Любительская: {stats.get('amateur_users', 0)}
+• Профессиональная: {stats.get('professional_users', 0)}
+• Премиум: {stats.get('premium_users', 0)}
     """
     
     await update.message.reply_text(
@@ -172,7 +297,7 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     await update.message.reply_text(
         "❌ Операция отменена",
-        reply_markup=get_main_menu_keyboard()
+        reply_markup=get_main_menu_keyboard(update.effective_user.id)
     )
     return ConversationHandler.END
 
@@ -184,12 +309,24 @@ async def back_to_menu_callback(update: Update, context: ContextTypes.DEFAULT_TY
     await query.answer()
     
     user_id = update.effective_user.id
+    user_data = db.get_user(user_id)
     accounts = db.get_user_accounts(user_id)
+    
+    subscription_active = user_data['subscription_end'] > datetime.now()
+    days_left = (user_data['subscription_end'] - datetime.now()).days
+    
     accounts_text = f"📱 Аккаунтов: {len(accounts)}" if accounts else "⚠️ Аккаунты не добавлены"
     
+    status_text = ""
+    if subscription_active:
+        if days_left <= 3:
+            status_text = f"\n⚠️ Подписка истекает через {days_left} дн."
+    else:
+        status_text = "\n❌ Подписка истекла!"
+    
     await query.edit_message_text(
-        f"Главное меню\n\n{accounts_text}\n\nВыберите действие:",
-        reply_markup=get_main_menu_keyboard()
+        f"Главное меню\n\n{accounts_text}{status_text}\n\nВыберите действие:",
+        reply_markup=get_main_menu_keyboard(user_id)
     )
 
 async def check_subscription_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -201,12 +338,235 @@ async def check_subscription_callback(update: Update, context: ContextTypes.DEFA
     is_subscribed = await check_subscription(user_id, context)
     
     if is_subscribed:
-        await query.edit_message_text(
-            "✅ Отлично! Вы подписаны.\n\nВыберите действие:",
-            reply_markup=get_main_menu_keyboard()
-        )
+        await start(update, context)
     else:
         await query.answer("❌ Вы ещё не подписались!", show_alert=True)
+
+async def my_status_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Мой статус"""
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = update.effective_user.id
+    status_text = get_user_status_text(user_id)
+    
+    keyboard = [
+        [InlineKeyboardButton("💎 Обновить тариф", callback_data="view_tariffs")],
+        [InlineKeyboardButton("◀️ Назад", callback_data="back_to_menu")]
+    ]
+    
+    await query.edit_message_text(
+        status_text,
+        parse_mode='Markdown',
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+async def view_tariffs_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показать тарифы"""
+    query = update.callback_query
+    await query.answer()
+    
+    tariffs_text = "💎 *Доступные тарифы:*\n\n"
+    keyboard = []
+    
+    for plan_id, plan in SUBSCRIPTIONS.items():
+        if plan_id == 'trial':
+            continue
+        
+        tariffs_text += f"*{plan['name']}* - {plan['price']}₽/{plan['duration']} дн.\n"
+        tariffs_text += f"{plan['description']}\n\n"
+        
+        keyboard.append([
+            InlineKeyboardButton(
+                f"💳 Купить {plan['name']} - {plan['price']}₽",
+                callback_data=f"buy_{plan_id}"
+            )
+        ])
+    
+    keyboard.append([InlineKeyboardButton("◀️ Назад", callback_data="back_to_menu")])
+    
+    await query.edit_message_text(
+        tariffs_text,
+        parse_mode='Markdown',
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+# ==================== ОПЛАТА ====================
+
+async def buy_subscription(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Начало покупки подписки"""
+    query = update.callback_query
+    await query.answer()
+    
+    plan_id = query.data.split('_')[1]
+    plan = SUBSCRIPTIONS.get(plan_id)
+    
+    if not plan:
+        await query.edit_message_text("❌ Тариф не найден")
+        return ConversationHandler.END
+    
+    context.user_data['buying_plan'] = plan_id
+    
+    payment_text = f"""
+💳 *Оплата тарифа "{plan['name']}"*
+
+💰 Сумма: {plan['price']}₽
+📅 Срок: {plan['duration']} дней
+
+*Реквизиты для оплаты:*
+💳 Карта: `{PAYMENT_CARD}`
+📱 Телефон: `{PAYMENT_PHONE}`
+
+Переведите {plan['price']}₽ и отправьте скриншот оплаты.
+
+Или /cancel для отмены
+    """
+    
+    await query.edit_message_text(
+        payment_text,
+        parse_mode='Markdown'
+    )
+    
+    return PAYMENT_RECEIPT
+
+async def payment_receipt(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка скриншота оплаты"""
+    user_id = update.effective_user.id
+    username = update.effective_user.username or "Без username"
+    plan_id = context.user_data.get('buying_plan')
+    
+    if not plan_id:
+        await update.message.reply_text("❌ Ошибка: тариф не выбран")
+        return ConversationHandler.END
+    
+    plan = SUBSCRIPTIONS.get(plan_id)
+    
+    # Сохраняем платёж в БД
+    payment_id = db.add_payment(user_id, plan_id, plan['price'])
+    
+    # Отправляем админу
+    try:
+        await context.bot.send_photo(
+            chat_id=ADMIN_ID,
+            photo=update.message.photo[-1].file_id,
+            caption=f"💰 *Новая оплата #{payment_id}*\n\n"
+                    f"👤 От: {username} (ID: {user_id})\n"
+                    f"💎 Тариф: {plan['name']}\n"
+                    f"💵 Сумма: {plan['price']}₽",
+            reply_markup=InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("✅ Подтвердить", callback_data=f"approve_payment_{payment_id}"),
+                    InlineKeyboardButton("❌ Отклонить", callback_data=f"reject_payment_{payment_id}")
+                ]
+            ]),
+            parse_mode='Markdown'
+        )
+        
+        await update.message.reply_text(
+            "✅ Скриншот отправлен администратору!\n\n"
+            "⏳ Ожидайте подтверждения оплаты (обычно до 10 минут).\n"
+            "Вы получите уведомление.",
+            reply_markup=get_main_menu_keyboard(user_id)
+        )
+    except Exception as e:
+        logger.error(f"Error sending payment to admin: {e}")
+        await update.message.reply_text(
+            "❌ Ошибка отправки. Попробуйте позже.",
+            reply_markup=get_main_menu_keyboard(user_id)
+        )
+    
+    context.user_data.clear()
+    return ConversationHandler.END
+
+async def approve_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Подтверждение оплаты админом"""
+    query = update.callback_query
+    await query.answer()
+    
+    if update.effective_user.id != ADMIN_ID:
+        await query.answer("❌ Нет доступа", show_alert=True)
+        return
+    
+    payment_id = int(query.data.split('_')[2])
+    payment = db.get_payment(payment_id)
+    
+    if not payment:
+        await query.edit_message_caption("❌ Платёж не найден")
+        return
+    
+    plan = SUBSCRIPTIONS.get(payment['plan_id'])
+    
+    # Обновляем подписку пользователя
+    db.update_user_subscription(
+        payment['user_id'],
+        payment['plan_id'],
+        days=plan['duration']
+    )
+    
+    # Обновляем статус платежа
+    db.update_payment_status(payment_id, 'approved')
+    
+    # Уведомляем пользователя
+    try:
+        await context.bot.send_message(
+            chat_id=payment['user_id'],
+            text=f"✅ *Оплата подтверждена!*\n\n"
+                 f"💎 Тариф: {plan['name']}\n"
+                 f"📅 Активен на {plan['duration']} дней\n\n"
+                 f"Спасибо за покупку! 🎉",
+                        parse_mode='Markdown',
+            reply_markup=get_main_menu_keyboard(payment['user_id'])
+        )
+    except Exception as e:
+        logger.error(f"Error notifying user: {e}")
+    
+    await query.edit_message_caption(
+        f"✅ *Оплата #{payment_id} подтверждена*\n\n"
+        f"👤 Пользователь: {payment['user_id']}\n"
+        f"💎 Тариф: {plan['name']}\n"
+        f"💵 Сумма: {plan['price']}₽",
+        parse_mode='Markdown'
+    )
+
+async def reject_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Отклонение оплаты админом"""
+    query = update.callback_query
+    await query.answer()
+    
+    if update.effective_user.id != ADMIN_ID:
+        await query.answer("❌ Нет доступа", show_alert=True)
+        return
+    
+    payment_id = int(query.data.split('_')[2])
+    payment = db.get_payment(payment_id)
+    
+    if not payment:
+        await query.edit_message_caption("❌ Платёж не найден")
+        return
+    
+    # Обновляем статус платежа
+    db.update_payment_status(payment_id, 'rejected')
+    
+    # Уведомляем пользователя
+    try:
+        await context.bot.send_message(
+            chat_id=payment['user_id'],
+            text=f"❌ *Оплата отклонена*\n\n"
+                 f"Причина: некорректный скриншот или сумма.\n\n"
+                 f"Свяжитесь с поддержкой для уточнения.",
+            parse_mode='Markdown',
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("💬 Поддержка", callback_data='support')
+            ]])
+        )
+    except Exception as e:
+        logger.error(f"Error notifying user: {e}")
+    
+    await query.edit_message_caption(
+        f"❌ *Оплата #{payment_id} отклонена*\n\n"
+        f"👤 Пользователь: {payment['user_id']}",
+        parse_mode='Markdown'
+    )
 
 # ==================== ПОДКЛЮЧЕНИЕ АККАУНТА ====================
 
@@ -214,6 +574,18 @@ async def connect_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Начало подключения аккаунта"""
     query = update.callback_query
     await query.answer()
+    
+    user_id = update.effective_user.id
+    
+    # Проверяем лимиты
+    limits = check_user_limits(user_id, 'account')
+    if not limits['allowed']:
+        keyboard = [[InlineKeyboardButton("💎 Обновить тариф", callback_data="view_tariffs")]]
+        await query.edit_message_text(
+            f"⚠️ {limits['reason']}",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        return ConversationHandler.END
     
     await query.edit_message_text(
         "📱 *Добавление аккаунта*\n\n"
@@ -285,7 +657,7 @@ async def receive_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "• Начать рассылку\n"
                 "• Настроить расписание",
                 parse_mode='Markdown',
-                reply_markup=get_main_menu_keyboard()
+                reply_markup=get_main_menu_keyboard(user_id)
             )
         else:
             await update.message.reply_text("❌ Ошибка сохранения аккаунта")
@@ -329,7 +701,7 @@ async def receive_password(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "• Начать рассылку\n"
                 "• Настроить расписание",
                 parse_mode='Markdown',
-                reply_markup=get_main_menu_keyboard()
+                reply_markup=get_main_menu_keyboard(user_id)
             )
         else:
             await update.message.reply_text("❌ Ошибка сохранения аккаунта")
@@ -666,7 +1038,7 @@ async def select_all_accounts(update: Update, context: ContextTypes.DEFAULT_TYPE
     query = update.callback_query
     await query.answer()
     
-    user_id = update.effective_user.id
+        user_id = update.effective_user.id
     accounts = db.get_user_accounts(user_id)
     context.user_data['selected_accounts'] = [acc['id'] for acc in accounts]
     
@@ -732,6 +1104,16 @@ async def start_mailing(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     
     user_id = update.effective_user.id
+    
+    # Проверяем лимиты
+    limits = check_user_limits(user_id, 'mailing')
+    if not limits['allowed']:
+        keyboard = [[InlineKeyboardButton("💎 Обновить тариф", callback_data="view_tariffs")]]
+        await query.edit_message_text(
+            f"⚠️ {limits['reason']}",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        return ConversationHandler.END
     
     # Проверяем аккаунты
     accounts = db.get_user_accounts(user_id)
@@ -804,6 +1186,9 @@ async def mailing_message_received(update: Update, context: ContextTypes.DEFAULT
     elif message.video:
         preview = "[Видео]" + (f"\n{message.caption}" if message.caption else "")
     
+    # Расчёт примерного времени
+    estimated_time = (targets_count * 5) // 60  # 5 сек на сообщение
+    
     keyboard = [
         [InlineKeyboardButton("✅ Запустить", callback_data='confirm_mailing')],
         [InlineKeyboardButton("❌ Отмена", callback_data='cancel_mailing')]
@@ -814,7 +1199,8 @@ async def mailing_message_received(update: Update, context: ContextTypes.DEFAULT
         f"👥 Аккаунтов: {accounts_count}\n"
         f"🎯 Чатов: {targets_count}\n"
         f"📨 Сообщение:\n{preview}\n\n"
-        f"⏱ Примерное время: ~{targets_count * 5 // 60} мин",
+        f"⏱ Примерное время: ~{estimated_time} мин\n"
+        f"⏳ Задержка между сообщениями: 5 сек",
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode='Markdown'
     )
@@ -830,7 +1216,7 @@ async def cancel_mailing(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await query.edit_message_text(
         "❌ Рассылка отменена",
-        reply_markup=get_main_menu_keyboard()
+        reply_markup=get_main_menu_keyboard(update.effective_user.id)
     )
     
     return ConversationHandler.END
@@ -865,11 +1251,13 @@ async def start_user_mailing(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await query.edit_message_text("❌ Не удалось загрузить аккаунты")
         return ConversationHandler.END
     
-    await query.edit_message_text(
+    # Сохраняем начальное сообщение для обновления прогресса
+    progress_message = await query.edit_message_text(
         f"📨 *Рассылка запущена!*\n\n"
         f"👥 Аккаунтов: {len(accounts_data)}\n"
         f"🎯 Чатов: {len(targets)}\n"
-        f"📊 На аккаунт: ~{len(targets) // len(accounts_data)}",
+        f"📊 На аккаунт: ~{len(targets) // len(accounts_data)}\n\n"
+        f"⏳ Идёт рассылка...",
         parse_mode='Markdown'
     )
     
@@ -879,6 +1267,7 @@ async def start_user_mailing(update: Update, context: ContextTypes.DEFAULT_TYPE)
     
     total_sent = 0
     total_errors = 0
+    start_time = datetime.now()
     
     start_idx = 0
     for idx, account in enumerate(accounts_data):
@@ -890,11 +1279,20 @@ async def start_user_mailing(update: Update, context: ContextTypes.DEFAULT_TYPE)
         if not account_targets:
             continue
         
-        await query.edit_message_text(
+        # Обновляем прогресс
+        elapsed = (datetime.now() - start_time).seconds
+        remaining_accounts = len(accounts_data) - idx
+        estimated_remaining = (elapsed / (idx + 1)) * remaining_accounts if idx > 0 else 0
+        
+        await progress_message.edit_text(
             f"📨 *Рассылка:*\n\n"
             f"🔄 Аккаунт {idx + 1}/{len(accounts_data)}\n"
             f"📱 {account['account_name']}\n"
-            f"🎯 Чатов: {len(account_targets)}",
+            f"🎯 Чатов: {len(account_targets)}\n\n"
+            f"✅ Отправлено: {total_sent}\n"
+            f"❌ Ошибок: {total_errors}\n"
+            f"⏱ Прошло: {elapsed // 60} мин {elapsed % 60} сек\n"
+            f"⏳ Осталось: ~{int(estimated_remaining // 60)} мин",
             parse_mode='Markdown'
         )
         
@@ -910,17 +1308,19 @@ async def start_user_mailing(update: Update, context: ContextTypes.DEFAULT_TYPE)
         if idx < len(accounts_data) - 1:
             await asyncio.sleep(10)
     
+    total_time = (datetime.now() - start_time).seconds
     success_rate = int((total_sent / len(targets)) * 100) if targets else 0
     
-    await query.edit_message_text(
+    await progress_message.edit_text(
         f"✅ *Рассылка завершена!*\n\n"
         f"📊 *Статистика:*\n\n"
         f"👥 Использовано аккаунтов: {len(accounts_data)}\n"
         f"✅ Отправлено: {total_sent}/{len(targets)}\n"
         f"❌ Ошибок: {total_errors}\n"
-        f"📈 Успешность: {success_rate}%",
+        f"📈 Успешность: {success_rate}%\n"
+        f"⏱ Время: {total_time // 60} мин {total_time % 60} сек",
         parse_mode='Markdown',
-        reply_markup=get_main_menu_keyboard()
+        reply_markup=get_main_menu_keyboard(user_id)
     )
     
     context.user_data.clear()
@@ -939,7 +1339,7 @@ async def run_single_account_mailing(account: dict, targets: list, mailing_messa
     sent = 0
     errors = 0
     
-    # Фаза 1: Вступление
+    # Фаза 1: Вступление в чаты (без уведомления)
     for target in targets:
         try:
             await userbot_manager.join_chat(session_id, phone, target)
@@ -949,7 +1349,7 @@ async def run_single_account_mailing(account: dict, targets: list, mailing_messa
     
     await asyncio.sleep(10)
     
-    # Фаза 2: Отправка
+    # Фаза 2: Отправка сообщений
     for target in targets:
         try:
             if mailing_message.text:
@@ -991,12 +1391,13 @@ async def run_single_account_mailing(account: dict, targets: list, mailing_messa
             else:
                 errors += 1
             
-            await asyncio.sleep(5)
+            await asyncio.sleep(MAILING_DELAY)
             
         except Exception as e:
             errors += 1
-            logger.error(f"Error: {e}")
+            logger.error(f"Error sending to {target}: {e}")
     
+    # Сохраняем в историю
     message_text = mailing_message.text or mailing_message.caption or "[Медиа]"
     db.add_mailing(user_id, message_text, sent, errors)
     
@@ -1037,7 +1438,7 @@ async def mailing_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await query.edit_message_text(
         history_text,
-                reply_markup=InlineKeyboardMarkup(keyboard),
+        reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode='Markdown'
     )
 
@@ -1052,10 +1453,12 @@ async def help_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 ℹ️ *Справка*
 
 *Как начать:*
-1. Добавьте Telegram аккаунт
-2. Создайте рассылку
-3. Выберите аккаунты
-4. Отправьте сообщение
+1. Подпишитесь на канал
+2. Выберите тариф (есть пробный)
+3. Добавьте Telegram аккаунт
+4. Создайте рассылку
+5. Выберите аккаунты
+6. Отправьте сообщение
 
 *Форматы ссылок:*
 • https://t.me/channel
@@ -1065,6 +1468,7 @@ async def help_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 *Ограничения:*
 • Задержка 5 сек между сообщениями
 • Автоматическое вступление в группы
+• Лимиты зависят от тарифа
 
 *Команды:*
 /start - Главное меню
@@ -1122,13 +1526,13 @@ async def support_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await message.reply_text(
             "✅ Ваше сообщение отправлено администратору!\n"
             "Ожидайте ответа.",
-            reply_markup=get_main_menu_keyboard()
+            reply_markup=get_main_menu_keyboard(user_id)
         )
     except Exception as e:
         logger.error(f"Error sending to admin: {e}")
         await message.reply_text(
             "❌ Ошибка отправки. Попробуйте позже.",
-            reply_markup=get_main_menu_keyboard()
+            reply_markup=get_main_menu_keyboard(user_id)
         )
     
     return ConversationHandler.END
@@ -1151,7 +1555,7 @@ async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 👥 *Пользователи:*
 • Всего: {stats.get('total_users', 0)}
-• Активных: {stats.get('active_users', 0)}
+• Активных подписок: {stats.get('active_subscriptions', 0)}
 • Новых за сегодня: {stats.get('new_today', 0)}
 
 📱 *Аккаунты:*
@@ -1163,8 +1567,18 @@ async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
 • За сегодня: {stats.get('mailings_today', 0)}
 • Сообщений отправлено: {stats.get('total_sent', 0)}
 
+💎 *По тарифам:*
+• Пробный: {stats.get('trial_users', 0)}
+• Любительская: {stats.get('amateur_users', 0)}
+• Профессиональная: {stats.get('professional_users', 0)}
+• Премиум: {stats.get('premium_users', 0)}
+
 ⏰ *Запланировано:*
 • Рассылок: {stats.get('total_scheduled', 0)}
+
+💰 *Финансы:*
+• Ожидают оплаты: {stats.get('pending_payments', 0)}
+• Подтверждено платежей: {stats.get('approved_payments', 0)}
     """
     
     keyboard = [[InlineKeyboardButton("◀️ Назад", callback_data='admin_menu')]]
@@ -1195,9 +1609,15 @@ async def admin_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for idx, user in enumerate(users, 1):
         username = user.get('username') or 'Без username'
         accounts_count = len(db.get_user_accounts(user['user_id']))
+        plan = SUBSCRIPTIONS.get(user.get('subscription_plan', 'trial'), {})
+        plan_name = plan.get('name', 'Неизвестно')
+        
+        subscription_active = user['subscription_end'] > datetime.now()
+        status = "✅" if subscription_active else "❌"
         
         users_text += (
             f"{idx}. {username} (ID: {user['user_id']})\n"
+            f"   💎 Тариф: {plan_name} {status}\n"
             f"   📱 Аккаунтов: {accounts_count}\n"
             f"   📅 Регистрация: {user['created_at'][:10]}\n\n"
         )
@@ -1247,7 +1667,7 @@ async def admin_mailing_message(update: Update, context: ContextTypes.DEFAULT_TY
     
     keyboard = [
         [InlineKeyboardButton("✅ Отправить", callback_data='admin_confirm_mailing')],
-        [InlineKeyboardButton("❌ Отмена", callback_data='back_to_menu')]
+        [InlineKeyboardButton("❌ Отмена", callback_data='admin_menu')]
     ]
     
     await message.reply_text(
@@ -1276,9 +1696,10 @@ async def admin_mailing_confirm(update: Update, context: ContextTypes.DEFAULT_TY
     
     all_users = db.get_all_users()
     
-    await query.edit_message_text(
+    progress_msg = await query.edit_message_text(
         f"📮 Рассылка запущена!\n\n"
-        f"👥 Пользователей: {len(all_users)}"
+        f"👥 Пользователей: {len(all_users)}\n"
+        f"⏳ Идёт отправка..."
     )
     
     sent = 0
@@ -1305,13 +1726,22 @@ async def admin_mailing_confirm(update: Update, context: ContextTypes.DEFAULT_TY
                 )
             
             sent += 1
+            
+            # Обновляем прогресс каждые 10 пользователей
+            if sent % 10 == 0:
+                await progress_msg.edit_text(
+                    f"📮 Рассылка:\n\n"
+                    f"✅ Отправлено: {sent}/{len(all_users)}\n"
+                    f"❌ Ошибок: {errors}"
+                )
+            
             await asyncio.sleep(0.05)  # Защита от флуда
             
         except Exception as e:
             errors += 1
             logger.error(f"Error sending to {user['user_id']}: {e}")
     
-    await query.edit_message_text(
+    await progress_msg.edit_text(
         f"✅ *Рассылка завершена!*\n\n"
         f"✅ Отправлено: {sent}\n"
         f"❌ Ошибок: {errors}",
@@ -1331,14 +1761,46 @@ async def admin_payments(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer("❌ Нет доступа", show_alert=True)
         return
     
-    # Заглушка - реализуй логику получения платежей из БД
+    pending = db.get_pending_payments()
+    
+    if not pending:
+        await query.edit_message_text(
+            "💳 *Ожидающие оплаты*\n\n"
+            "Нет ожидающих платежей",
+            parse_mode='Markdown',
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("◀️ Назад", callback_data='admin_menu')
+            ]])
+        )
+        return
+    
+    payments_text = "💳 *Ожидающие оплаты:*\n\n"
+    keyboard = []
+    
+    for idx, payment in enumerate(pending, 1):
+        plan = SUBSCRIPTIONS.get(payment['plan_id'], {})
+        username = db.get_user(payment['user_id']).get('username', 'Без username')
+        
+        payments_text += (
+            f"{idx}. 👤 {username} (ID: {payment['user_id']})\n"
+            f"   💎 Тариф: {plan.get('name', 'Неизвестно')}\n"
+            f"   💵 Сумма: {payment['amount']}₽\n"
+            f"   📅 {payment['created_at'][:16]}\n\n"
+        )
+        
+        keyboard.append([
+            InlineKeyboardButton(
+                f"#{payment['id']} - {username}",
+                callback_data=f"view_payment_{payment['id']}"
+            )
+        ])
+    
+    keyboard.append([InlineKeyboardButton("◀️ Назад", callback_data='admin_menu')])
+    
     await query.edit_message_text(
-        "💳 *Ожидающие оплаты*\n\n"
-        "Функция в разработке...",
+        payments_text,
         parse_mode='Markdown',
-        reply_markup=InlineKeyboardMarkup([[
-            InlineKeyboardButton("◀️ Назад", callback_data='admin_menu')
-        ]])
+        reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
 async def admin_backup(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1351,9 +1813,6 @@ async def admin_backup(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     try:
-        import shutil
-        from datetime import datetime
-        
         # Создаем бэкап
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         backup_file = f"backup_{timestamp}.db"
@@ -1365,7 +1824,7 @@ async def admin_backup(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 chat_id=ADMIN_ID,
                 document=f,
                 filename=backup_file,
-                caption="💾 Бэкап базы данных"
+                caption=f"💾 Бэкап базы данных\n📅 {datetime.now().strftime('%d.%m.%Y %H:%M')}"
             )
         
         # Удаляем временный файл
@@ -1399,9 +1858,11 @@ async def admin_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 📊 *Статистика:*
 👥 Всего пользователей: {stats.get('total_users', 0)}
+💰 Активных подписок: {stats.get('active_subscriptions', 0)}
 📱 Всего аккаунтов: {stats.get('total_accounts', 0)}
 📨 Всего рассылок: {stats.get('total_mailings', 0)}
 ⏰ Запланировано: {stats.get('total_scheduled', 0)}
+💳 Ожидают оплаты: {stats.get('pending_payments', 0)}
     """
     
     await query.edit_message_text(
@@ -1460,7 +1921,7 @@ def main():
             ],
             ADMIN_MAILING_CONFIRM: [
                 CallbackQueryHandler(admin_mailing_confirm, pattern='^admin_confirm_mailing$'),
-                CallbackQueryHandler(back_to_menu_callback, pattern='^back_to_menu$')
+                CallbackQueryHandler(admin_menu_callback, pattern='^admin_menu$')
             ]
         },
         fallbacks=[CommandHandler('cancel', cancel)]
@@ -1475,6 +1936,15 @@ def main():
         fallbacks=[CommandHandler('cancel', cancel)]
     )
     
+    # Оплата
+    payment_handler = ConversationHandler(
+        entry_points=[CallbackQueryHandler(buy_subscription, pattern='^buy_')],
+        states={
+            PAYMENT_RECEIPT: [MessageHandler(filters.PHOTO, payment_receipt)]
+        },
+        fallbacks=[CommandHandler('cancel', cancel)]
+    )
+    
     # ==================== Команды ====================
     application.add_handler(CommandHandler('start', start))
     application.add_handler(CommandHandler('admin', admin_panel))
@@ -1485,12 +1955,15 @@ def main():
     application.add_handler(user_mailing_handler)
     application.add_handler(admin_mailing_handler)
     application.add_handler(support_handler)
+    application.add_handler(payment_handler)
     
     # ==================== Callback Handlers ====================
     
     # Главное меню
     application.add_handler(CallbackQueryHandler(back_to_menu_callback, pattern='^back_to_menu$'))
     application.add_handler(CallbackQueryHandler(check_subscription_callback, pattern='^check_subscription$'))
+    application.add_handler(CallbackQueryHandler(my_status_callback, pattern='^my_status$'))
+    application.add_handler(CallbackQueryHandler(view_tariffs_callback, pattern='^view_tariffs$'))
     
     # Аккаунты
     application.add_handler(CallbackQueryHandler(accounts_menu, pattern='^accounts_menu$'))
@@ -1522,9 +1995,13 @@ def main():
     application.add_handler(CallbackQueryHandler(admin_payments, pattern='^admin_payments$'))
     application.add_handler(CallbackQueryHandler(admin_backup, pattern='^admin_backup$'))
     application.add_handler(CallbackQueryHandler(admin_menu_callback, pattern='^admin_menu$'))
+    application.add_handler(CallbackQueryHandler(approve_payment, pattern='^approve_payment_\d+$'))
+    application.add_handler(CallbackQueryHandler(reject_payment, pattern='^reject_payment_\d+$'))
     
     # Запуск
     logger.info("🤖 Bot starting...")
+    logger.info("📊 Subscriptions system enabled")
+    logger.info(f"👤 Admin ID: {ADMIN_ID}")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
