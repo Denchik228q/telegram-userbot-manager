@@ -1075,7 +1075,7 @@ async def start_user_mailing(update: Update, context: ContextTypes.DEFAULT_TYPE)
     
     success_rate = int((sent / len(targets)) * 100) if targets else 0
     
-        await query.edit_message_text(
+    await query.edit_message_text(
         f"✅ *Рассылка завершена!*\n\n"
         f"📊 *Статистика:*\n\n"
         f"🔗 *Подписки:*\n"
