@@ -511,7 +511,7 @@ async def my_schedules(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = "📋 *Ваши запланированные рассылки:*\n\n"
     keyboard = []
     
-        for idx, schedule in enumerate(schedules, 1):
+    for idx, schedule in enumerate(schedules, 1):
         targets_count = len(schedule['targets'])
         text += f"{idx}. 📨 {targets_count} чатов\n"
         
