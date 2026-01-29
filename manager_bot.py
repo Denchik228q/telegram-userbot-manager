@@ -209,7 +209,7 @@ def get_user_status_text(user_id: int) -> str:
 # ==================== КОМАНДЫ ====================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик команды /start"""
+    """Обработчик команды /start и главного меню"""
     user_id = update.effective_user.id
     username = update.effective_user.username
     
@@ -235,6 +235,71 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         return
     
+    # ✅ ПРОВЕРЯЕМ ТЕКСТ СООБЩЕНИЯ (КНОПКИ МЕНЮ)
+    message = update.message
+    if message and message.text:
+        text = message.text
+        
+        # Обработка кнопок меню
+        if text == '📨 Создать рассылку':
+            # Проверяем лимиты
+            limits = check_user_limits(user_id, 'mailing')
+            if not limits['allowed']:
+                await message.reply_text(
+                    f"⚠️ {limits['reason']}",
+                    reply_markup=InlineKeyboardMarkup([[
+                        InlineKeyboardButton("💎 Тарифы", callback_data="view_tariffs")
+                    ]])
+                )
+                return
+            
+            await message.reply_text(
+                "📝 Отправьте список ссылок на группы/каналы\n"
+                "(по одной на строку)\n\n"
+                "Или /cancel для отмены"
+            )
+            return MAILING_TARGETS
+        
+        elif text == '📱 Мои аккаунты':
+            await accounts_menu(update, context)
+            return
+        
+        elif text == '⏰ Планировщик':
+            keyboard = [
+                [InlineKeyboardButton("➕ Создать расписание", callback_data='create_schedule')],
+                [InlineKeyboardButton("📋 Мои расписания", callback_data='my_schedules')],
+                [InlineKeyboardButton("◀️ Назад", callback_data='back_to_menu')]
+            ]
+            
+            await message.reply_text(
+                "⏰ *Планировщик рассылок*\n\n"
+                "Автоматическая отправка сообщений по расписанию:\n\n"
+                "• 🔂 *Один раз* - запуск в конкретное время\n"
+                "• 📅 *Ежедневно* - каждый день в одно время\n"
+                "• ⏰ *Ежечасно* - каждый час\n\n"
+                "Выберите действие:",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode='Markdown'
+            )
+            return
+        
+        elif text == '📜 История':
+            await mailing_history(update, context)
+            return
+        
+        elif text == '📊 Мой статус':
+            await my_status_callback(update, context)
+            return
+        
+        elif text == '💎 Тарифы':
+            await view_tariffs_callback(update, context)
+            return
+        
+        elif text == 'ℹ️ Помощь':
+            await help_callback(update, context)
+            return
+    
+    # ✅ ЕСЛИ НЕ КНОПКА, ПОКАЗЫВАЕМ ГЛАВНОЕ МЕНЮ
     # Получаем статус пользователя
     user_data = db.get_user(user_id)
     accounts = db.get_user_accounts(user_id)
@@ -273,21 +338,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             welcome_text,
             reply_markup=get_main_menu_keyboard(user_id)
         )
-
-    elif text == '⏰ Планировщик':
-        keyboard = [
-            [InlineKeyboardButton("➕ Создать расписание", callback_data='create_schedule')],
-            [InlineKeyboardButton("📋 Мои расписания", callback_data='my_schedules')],
-            [InlineKeyboardButton("◀️ Назад", callback_data='back_to_menu')]
-        ]
-        
-        await message.reply_text(
-            "⏰ *Планировщик рассылок*\n\n"
-            "Автоматическая отправка сообщений по расписанию",
-            reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode='Markdown'
-        )
-        return
 
 async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Админ-панель"""
