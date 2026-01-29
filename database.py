@@ -372,78 +372,6 @@ class Database:
             return 0
     
     # ==================== ЗАПЛАНИРОВАННЫЕ РАССЫЛКИ ====================
-
-
-        def get_active_scheduled_mailings(self) -> List[Dict]:
-        """Получить все активные запланированные рассылки"""
-        try:
-            with self._get_connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute("""
-                    SELECT * FROM scheduled_mailings
-                    WHERE is_active = 1
-                    ORDER BY created_at DESC
-                """)
-                
-                schedules = []
-                for row in cursor.fetchall():
-                    schedule = dict(row)
-                    # Парсим targets из строки в список
-                    if schedule.get('targets'):
-                        schedule['targets'] = schedule['targets'].split('|||')
-                    if schedule.get('account_ids'):
-                        schedule['account_ids'] = [int(x) for x in schedule['account_ids'].split(',') if x]
-                    schedules.append(schedule)
-                return schedules
-        except Exception as e:
-            logger.error(f"Error getting active scheduled mailings: {e}")
-            return []
-    
-    def add_scheduled_mailing(self, user_id: int, targets: List[str], 
-                            account_ids: List[int], message_text: str = None,
-                            message_photo: str = None, message_video: str = None,
-                            message_caption: str = None, schedule_type: str = 'once',
-                            schedule_time: str = None) -> Optional[int]:
-        """Добавить запланированную рассылку"""
-        try:
-            with self._get_connection() as conn:
-                cursor = conn.cursor()
-                
-                # Конвертируем списки в строки
-                targets_str = '|||'.join(targets)
-                account_ids_str = ','.join(map(str, account_ids))
-                
-                cursor.execute("""
-                    INSERT INTO scheduled_mailings 
-                    (user_id, targets, account_ids, message_text, message_photo, 
-                     message_video, message_caption, schedule_type, schedule_time)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, (user_id, targets_str, account_ids_str, message_text, 
-                      message_photo, message_video, message_caption, 
-                      schedule_type, schedule_time))
-                
-                schedule_id = cursor.lastrowid
-                logger.info(f"✅ Scheduled mailing created: #{schedule_id}")
-                return schedule_id
-        except Exception as e:
-            logger.error(f"Error adding scheduled mailing: {e}")
-            return None
-    
-    def update_scheduled_mailing_run(self, schedule_id: int) -> bool:
-        """Обновить время последнего запуска"""
-        try:
-            with self._get_connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute("""
-                    UPDATE scheduled_mailings 
-                    SET last_run = CURRENT_TIMESTAMP
-                    WHERE id = ?
-                """, (schedule_id,))
-                return True
-        except Exception as e:
-            logger.error(f"Error updating scheduled mailing run: {e}")
-            return False
-
     
     def get_user_scheduled_mailings(self, user_id: int) -> List[Dict]:
         """Получить запланированные рассылки пользователя"""
@@ -481,6 +409,86 @@ class Database:
                 return True
         except Exception as e:
             logger.error(f"Error deleting scheduled mailing: {e}")
+            return False
+    
+    def get_active_scheduled_mailings(self) -> List[Dict]:
+        """Получить все активные запланированные рассылки"""
+        try:
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT * FROM scheduled_mailings
+                    WHERE is_active = 1
+                    ORDER BY created_at DESC
+                """)
+                
+                schedules = []
+                for row in cursor.fetchall():
+                    schedule = dict(row)
+                    # Парсим targets
+                    if schedule.get('targets'):
+                        try:
+                            schedule['targets'] = schedule['targets'].split('|||')
+                        except:
+                            schedule['targets'] = []
+                    
+                    # Парсим account_ids
+                    if schedule.get('account_ids'):
+                        try:
+                            schedule['account_ids'] = [int(x) for x in schedule['account_ids'].split(',') if x]
+                        except:
+                            schedule['account_ids'] = []
+                    
+                    schedules.append(schedule)
+                
+                return schedules
+        except Exception as e:
+            logger.error(f"Error getting active scheduled mailings: {e}")
+            return []
+    
+    def add_scheduled_mailing(self, user_id: int, targets: List[str], 
+                            account_ids: List[int], message_text: str = None,
+                            message_photo: str = None, message_video: str = None,
+                            message_caption: str = None, schedule_type: str = 'once',
+                            schedule_time: str = None) -> Optional[int]:
+        """Добавить запланированную рассылку"""
+        try:
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+                
+                # Конвертируем списки в строки
+                targets_str = '|||'.join(targets) if targets else ''
+                account_ids_str = ','.join(map(str, account_ids)) if account_ids else ''
+                
+                cursor.execute("""
+                    INSERT INTO scheduled_mailings 
+                    (user_id, targets, account_ids, message_text, message_photo, 
+                     message_video, message_caption, schedule_type, schedule_time)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (user_id, targets_str, account_ids_str, message_text, 
+                      message_photo, message_video, message_caption, 
+                      schedule_type, schedule_time))
+                
+                schedule_id = cursor.lastrowid
+                logger.info(f"✅ Scheduled mailing created: #{schedule_id}")
+                return schedule_id
+        except Exception as e:
+            logger.error(f"Error adding scheduled mailing: {e}")
+            return None
+    
+    def update_scheduled_mailing_run(self, schedule_id: int) -> bool:
+        """Обновить время последнего запуска"""
+        try:
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    UPDATE scheduled_mailings 
+                    SET last_run = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                """, (schedule_id,))
+                return True
+        except Exception as e:
+            logger.error(f"Error updating scheduled mailing run: {e}")
             return False
     
     # ==================== ПЛАТЕЖИ ====================
@@ -627,3 +635,12 @@ if __name__ == '__main__':
     # Тест
     db = Database()
     print("✅ Database initialized successfully")
+    
+    # Тест создания пользователя
+    db.add_user(123456789, "test_user")
+    user = db.get_user(123456789)
+    print(f"✅ Test user: {user}")
+    
+    # Тест статистики
+    stats = db.get_stats()
+    print(f"✅ Stats: {stats}")
