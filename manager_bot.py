@@ -47,8 +47,6 @@ logger = logging.getLogger(__name__)
 # Инициализация
 db = Database()
 userbot_manager = UserbotManager()
-mailing_scheduler = MailingScheduler(db, userbot_manager, application.bot)
-mailing_scheduler.start()
 
 # Состояния для ConversationHandler
 PHONE, CODE, PASSWORD = range(3)
@@ -2493,7 +2491,12 @@ async def admin_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 def main():
     """Запуск бота"""
+    global mailing_scheduler
+
     application = Application.builder().token(MANAGER_BOT_TOKEN).build()
+
+    mailing_scheduler = MailingScheduler(db, userbot_manager, application.bot)
+    mailing_scheduler.start()
     
     # ==================== ConversationHandlers ====================
     
