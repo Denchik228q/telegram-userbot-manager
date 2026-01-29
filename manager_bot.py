@@ -47,7 +47,7 @@ logger = logging.getLogger(__name__)
 # Инициализация
 db = Database()
 userbot_manager = UserbotManager()
-mailing_scheduler = MailingScheduler(db, userbot_manager)
+mailing_scheduler = MailingScheduler(db, userbot_manager, application.bot)
 mailing_scheduler.start()
 
 # Состояния для ConversationHandler
@@ -56,6 +56,14 @@ SUPPORT_MESSAGE = 10
 PAYMENT_RECEIPT = 20
 ADMIN_MAILING_MESSAGE, ADMIN_MAILING_CONFIRM = 100, 101
 USER_MAILING_TARGETS, USER_MAILING_MESSAGE, USER_MAILING_CONFIRM = 200, 201, 202
+
+# Состояния для планировщика
+SCHEDULE_TARGETS = 100
+SCHEDULE_ACCOUNTS = 101
+SCHEDULE_MESSAGE = 102
+SCHEDULE_TYPE = 103
+SCHEDULE_TIME = 104
+SCHEDULE_CONFIRM = 105
 
 # ==================== КЛАВИАТУРЫ ====================
 
@@ -107,44 +115,58 @@ async def check_subscription(user_id: int, context: ContextTypes.DEFAULT_TYPE) -
         return True
     return True
 
-def check_user_limits(user_id: int, action: str = 'account') -> dict:
+def check_user_limits(user_id: int, action: str) -> dict:
     """Проверка лимитов пользователя"""
-    user_data = db.get_user(user_id)
-    
-    if not user_data:
+    user = db.get_user(user_id)
+    if not user:
         return {'allowed': False, 'reason': 'Пользователь не найден'}
     
-    # Проверка активности подписки
-    if user_data['subscription_end'] < datetime.now():
-        return {'allowed': False, 'reason': 'Подписка истекла'}
+    plan_id = user.get('subscription_plan', 'trial')
+    plan = SUBSCRIPTIONS.get(plan_id)
     
-    plan = SUBSCRIPTIONS.get(user_data['subscription_plan'])
     if not plan:
         return {'allowed': False, 'reason': 'Неизвестный тариф'}
     
+    # Проверка срока подписки
+    subscription_end = user.get('subscription_end')
+    if isinstance(subscription_end, str):
+        subscription_end = datetime.fromisoformat(subscription_end)
+    
+    if subscription_end < datetime.now():
+        return {
+            'allowed': False, 
+            'reason': '⚠️ Подписка истекла!\n\nОбновите тариф для продолжения работы.'
+        }
+    
+    # Проверка лимита аккаунтов
     if action == 'account':
-        # Проверка лимита аккаунтов
-        accounts = db.get_user_accounts(user_id)
-        max_accounts = plan.get('max_accounts', 1)
+        current_accounts = len(db.get_user_accounts(user_id))
+        max_accounts = plan['max_accounts']
         
-        if max_accounts != -1 and len(accounts) >= max_accounts:
+        if current_accounts >= max_accounts:
             return {
                 'allowed': False,
-                'reason': f'Достигнут лимит аккаунтов ({max_accounts})\nОбновите тариф'
+                'reason': f'⚠️ Достигнут лимит аккаунтов!\n\n'
+                         f'📱 Подключено: {current_accounts}/{max_accounts}\n'
+                         f'💎 Тариф: {plan["name"]}\n\n'
+                         f'Обновите тариф для подключения большего количества аккаунтов.'
             }
     
-    elif action == 'mailing':
-        # Проверка лимита рассылок
-        today_mailings = db.get_user_mailings_today(user_id)
-        max_mailings = plan.get('max_mailings_per_day', 5)
+    # Проверка лимита рассылок
+    if action == 'mailing':
+        mailings_today = db.get_user_mailings_today(user_id)
+        max_mailings = plan['max_mailings_per_day']
         
-        if max_mailings != -1 and today_mailings >= max_mailings:
+        if max_mailings != -1 and mailings_today >= max_mailings:
             return {
                 'allowed': False,
-                'reason': f'Достигнут дневной лимит рассылок ({max_mailings})\nОбновите тариф'
+                'reason': f'⚠️ Достигнут дневной лимит рассылок!\n\n'
+                         f'📨 Сегодня: {mailings_today}/{max_mailings}\n'
+                         f'💎 Тариф: {plan["name"]}\n\n'
+                         f'Обновите тариф или попробуйте завтра.'
             }
     
-    return {'allowed': True}
+    return {'allowed': True, 'plan': plan}
 
 def get_user_status_text(user_id: int) -> str:
     """Получить текст статуса пользователя"""
@@ -251,6 +273,21 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             welcome_text,
             reply_markup=get_main_menu_keyboard(user_id)
         )
+
+    elif text == '⏰ Планировщик':
+        keyboard = [
+            [InlineKeyboardButton("➕ Создать расписание", callback_data='create_schedule')],
+            [InlineKeyboardButton("📋 Мои расписания", callback_data='my_schedules')],
+            [InlineKeyboardButton("◀️ Назад", callback_data='back_to_menu')]
+        ]
+        
+        await message.reply_text(
+            "⏰ *Планировщик рассылок*\n\n"
+            "Автоматическая отправка сообщений по расписанию",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode='Markdown'
+        )
+        return
 
 async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Админ-панель"""
@@ -844,28 +881,417 @@ async def confirm_delete_account(update: Update, context: ContextTypes.DEFAULT_T
         ]])
     )
 
-# ==================== ПЛАНИРОВЩИК РАССЫЛОК ====================
+# ==================== ПЛАНИРОВЩИК ====================
 
 async def schedule_mailing_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Меню планирования рассылок"""
+    """Меню планировщика"""
     query = update.callback_query
     await query.answer()
     
+    user_id = update.effective_user.id
+    
+    # Проверяем лимиты
+    limits = check_user_limits(user_id, 'mailing')
+    if not limits['allowed']:
+        keyboard = [[InlineKeyboardButton("💎 Обновить тариф", callback_data="view_tariffs")]]
+        await query.edit_message_text(
+            f"⚠️ {limits['reason']}",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        return
+    
     keyboard = [
+        [InlineKeyboardButton("➕ Создать расписание", callback_data='create_schedule')],
         [InlineKeyboardButton("📋 Мои расписания", callback_data='my_schedules')],
         [InlineKeyboardButton("◀️ Назад", callback_data='back_to_menu')]
     ]
     
     await query.edit_message_text(
         "⏰ *Планировщик рассылок*\n\n"
-        "Функция планировщика позволит настроить автоматические рассылки.\n\n"
-        "⚠️ В данный момент доступен только ручной запуск рассылок.",
+        "Автоматическая отправка сообщений по расписанию:\n"
+        "• Разовая рассылка\n"
+        "• Ежедневная рассылка\n"
+        "• Ежечасная рассылка",
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode='Markdown'
     )
 
+async def create_schedule_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Начало создания расписания"""
+    query = update.callback_query
+    await query.answer()
+    
+    await query.edit_message_text(
+        "📝 *Создание расписания*\n\n"
+        "Шаг 1: Отправьте список ссылок на группы/каналы\n"
+        "(по одной на строку)\n\n"
+        "Или /cancel для отмены",
+        parse_mode='Markdown'
+    )
+    
+    return SCHEDULE_TARGETS
+
+async def schedule_targets_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Получены таргеты для расписания"""
+    message = update.message
+    
+    targets_text = message.text.strip()
+    targets = [t.strip() for t in targets_text.split('\n') if t.strip()]
+    
+    if not targets:
+        await message.reply_text("❌ Не найдено ни одной ссылки!\nПопробуйте снова или /cancel")
+        return SCHEDULE_TARGETS
+    
+    context.user_data['schedule_targets'] = targets
+    
+    # Выбор аккаунтов
+    user_id = update.effective_user.id
+    accounts = db.get_user_accounts(user_id)
+    
+    if not accounts:
+        await message.reply_text("❌ Сначала добавьте хотя бы один аккаунт!")
+        return ConversationHandler.END
+    
+    keyboard = []
+    for account in accounts:
+        keyboard.append([InlineKeyboardButton(
+            f"📱 {account['account_name']} ({account['phone_number'][-4:]})",
+            callback_data=f"sched_toggle_{account['id']}"
+        )])
+    
+    keyboard.append([
+        InlineKeyboardButton("✅ Выбрать все", callback_data='sched_select_all'),
+        InlineKeyboardButton("❌ Снять все", callback_data='sched_deselect_all')
+    ])
+    keyboard.append([InlineKeyboardButton("➡️ Далее", callback_data='sched_accounts_done')])
+    
+    context.user_data['schedule_selected_accounts'] = []
+    
+    await message.reply_text(
+        f"✅ Получено {len(targets)} ссылок\n\n"
+        f"Шаг 2: Выберите аккаунты для рассылки:",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+    
+    return SCHEDULE_ACCOUNTS
+
+async def schedule_toggle_account(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Переключение аккаунта для расписания"""
+    query = update.callback_query
+    await query.answer()
+    
+    account_id = int(query.data.split('_')[-1])
+    selected = context.user_data.get('schedule_selected_accounts', [])
+    
+    if account_id in selected:
+        selected.remove(account_id)
+    else:
+        selected.append(account_id)
+    
+    context.user_data['schedule_selected_accounts'] = selected
+    
+    # Обновляем клавиатуру
+    user_id = update.effective_user.id
+    accounts = db.get_user_accounts(user_id)
+    
+    keyboard = []
+    for account in accounts:
+        is_selected = account['id'] in selected
+        emoji = "✅" if is_selected else "⬜️"
+        keyboard.append([InlineKeyboardButton(
+            f"{emoji} {account['account_name']} ({account['phone_number'][-4:]})",
+            callback_data=f"sched_toggle_{account['id']}"
+        )])
+    
+    keyboard.append([
+        InlineKeyboardButton("✅ Выбрать все", callback_data='sched_select_all'),
+        InlineKeyboardButton("❌ Снять все", callback_data='sched_deselect_all')
+    ])
+    keyboard.append([InlineKeyboardButton("➡️ Далее", callback_data='sched_accounts_done')])
+    
+    await query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup(keyboard))
+    return SCHEDULE_ACCOUNTS
+
+async def schedule_select_all_accounts(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Выбрать все аккаунты для расписания"""
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = update.effective_user.id
+    accounts = db.get_user_accounts(user_id)
+    context.user_data['schedule_selected_accounts'] = [acc['id'] for acc in accounts]
+    
+    await schedule_toggle_account(update, context)
+    return SCHEDULE_ACCOUNTS
+
+async def schedule_deselect_all_accounts(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Снять выбор со всех аккаунтов"""
+    query = update.callback_query
+    await query.answer()
+    
+    context.user_data['schedule_selected_accounts'] = []
+    await schedule_toggle_account(update, context)
+    return SCHEDULE_ACCOUNTS
+
+async def schedule_accounts_done(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Аккаунты выбраны, переход к сообщению"""
+    query = update.callback_query
+    await query.answer()
+    
+    selected = context.user_data.get('schedule_selected_accounts', [])
+    
+    if not selected:
+        await query.answer("❌ Выберите хотя бы один аккаунт!", show_alert=True)
+        return SCHEDULE_ACCOUNTS
+    
+    await query.edit_message_text(
+        f"✅ Выбрано аккаунтов: {len(selected)}\n\n"
+        f"Шаг 3: Отправьте сообщение для рассылки\n"
+        f"(текст, фото или видео)",
+        parse_mode='Markdown'
+    )
+    
+    return SCHEDULE_MESSAGE
+
+async def schedule_message_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Получено сообщение для расписания"""
+    message = update.message
+    
+    context.user_data['schedule_message'] = message
+    
+    keyboard = [
+        [InlineKeyboardButton("🔂 Один раз", callback_data='sched_type_once')],
+        [InlineKeyboardButton("📅 Ежедневно", callback_data='sched_type_daily')],
+        [InlineKeyboardButton("⏰ Каждый час", callback_data='sched_type_hourly')]
+    ]
+    
+    await message.reply_text(
+        "✅ Сообщение получено!\n\n"
+        "Шаг 4: Выберите тип расписания:",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+    
+    return SCHEDULE_TYPE
+
+async def schedule_type_selected(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Выбран тип расписания"""
+    query = update.callback_query
+    await query.answer()
+    
+    schedule_type = query.data.split('_')[-1]
+    context.user_data['schedule_type'] = schedule_type
+    
+    if schedule_type == 'once':
+        await query.edit_message_text(
+            "📅 Укажите дату и время запуска:\n\n"
+            "Формат: ДД.ММ.ГГГГ ЧЧ:ММ\n"
+            "Пример: 25.12.2024 15:30"
+        )
+    elif schedule_type == 'daily':
+        await query.edit_message_text(
+            "⏰ Укажите время ежедневного запуска:\n\n"
+            "Формат: ЧЧ:ММ\n"
+            "Пример: 09:00"
+        )
+    elif schedule_type == 'hourly':
+        await schedule_confirm(update, context)
+        return SCHEDULE_CONFIRM
+    
+    return SCHEDULE_TIME
+
+async def schedule_time_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Получено время для расписания"""
+    message = update.message
+    schedule_type = context.user_data.get('schedule_type')
+    
+    try:
+        if schedule_type == 'once':
+            # Парсим дату и время
+            time_str = message.text.strip()
+            schedule_time = datetime.strptime(time_str, '%d.%m.%Y %H:%M')
+            
+            if schedule_time < datetime.now():
+                await message.reply_text("❌ Время должно быть в будущем!\nПопробуйте снова:")
+                return SCHEDULE_TIME
+            
+            context.user_data['schedule_time'] = schedule_time.isoformat()
+            
+        elif schedule_type == 'daily':
+            # Парсим только время
+            time_str = message.text.strip()
+            time_parts = time_str.split(':')
+            if len(time_parts) != 2:
+                raise ValueError()
+            
+            hour, minute = int(time_parts[0]), int(time_parts[1])
+            if not (0 <= hour < 24 and 0 <= minute < 60):
+                raise ValueError()
+            
+            context.user_data['schedule_time'] = f"{hour:02d}:{minute:02d}"
+        
+        # Показываем подтверждение
+        await schedule_confirm(update, context)
+        return SCHEDULE_CONFIRM
+        
+    except:
+        await message.reply_text(
+            "❌ Неверный формат!\n\n"
+            f"{'Формат: ДД.ММ.ГГГГ ЧЧ:ММ' if schedule_type == 'once' else 'Формат: ЧЧ:ММ'}\n"
+            "Попробуйте снова:"
+        )
+        return SCHEDULE_TIME
+
+async def schedule_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Подтверждение создания расписания"""
+    schedule_type = context.user_data.get('schedule_type')
+    schedule_time = context.user_data.get('schedule_time', 'Каждый час')
+    targets = context.user_data.get('schedule_targets', [])
+    accounts = context.user_data.get('schedule_selected_accounts', [])
+    
+    type_names = {
+        'once': '🔂 Один раз',
+        'daily': '📅 Ежедневно',
+        'hourly': '⏰ Каждый час'
+    }
+    
+    if schedule_type == 'once':
+        time_display = datetime.fromisoformat(schedule_time).strftime('%d.%m.%Y в %H:%M')
+    elif schedule_type == 'daily':
+        time_display = f"Ежедневно в {schedule_time}"
+    else:
+        time_display = "Каждый час"
+    
+    keyboard = [
+        [InlineKeyboardButton("✅ Создать", callback_data='confirm_schedule')],
+        [InlineKeyboardButton("❌ Отмена", callback_data='cancel_schedule')]
+    ]
+    
+    text = (
+        f"📋 *Подтверждение расписания*\n\n"
+        f"📨 Тип: {type_names.get(schedule_type, 'Неизвестно')}\n"
+        f"⏰ Время: {time_display}\n"
+        f"🎯 Чатов: {len(targets)}\n"
+        f"👥 Аккаунтов: {len(accounts)}\n\n"
+        f"Создать расписание?"
+    )
+    
+    if isinstance(update, Update) and update.callback_query:
+        await update.callback_query.edit_message_text(
+            text,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode='Markdown'
+        )
+    else:
+        await update.message.reply_text(
+            text,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode='Markdown'
+        )
+    
+    return SCHEDULE_CONFIRM
+
+async def schedule_confirm_create(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Создание расписания подтверждено"""
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = update.effective_user.id
+    targets = context.user_data.get('schedule_targets', [])
+    accounts = context.user_data.get('schedule_selected_accounts', [])
+    message = context.user_data.get('schedule_message')
+    schedule_type = context.user_data.get('schedule_type')
+    schedule_time = context.user_data.get('schedule_time')
+    
+    # Извлекаем данные сообщения
+    message_text = message.text if message.text else None
+    message_photo = message.photo[-1].file_id if message.photo else None
+    message_video = message.video.file_id if message.video else None
+    message_caption = message.caption if message.caption else None
+    
+    # Сохраняем в БД
+    schedule_id = db.add_scheduled_mailing(
+        user_id=user_id,
+        targets=targets,
+        account_ids=accounts,
+        message_text=message_text,
+        message_photo=message_photo,
+        message_video=message_video,
+        message_caption=message_caption,
+        schedule_type=schedule_type,
+        schedule_time=schedule_time
+    )
+    
+    if schedule_id:
+        # Добавляем в планировщик
+        mailing_data = {
+            'id': schedule_id,
+            'user_id': user_id,
+            'targets': targets,
+            'account_ids': accounts,
+            'message_text': message_text,
+            'message_photo': message_photo,
+            'message_video': message_video,
+            'message_caption': message_caption,
+            'schedule_type': schedule_type,
+            'schedule_time': schedule_time
+        }
+        
+        mailing_scheduler.add_job(mailing_data)
+        
+        type_names = {
+            'once': '🔂 Один раз',
+            'daily': '📅 Ежедневно',
+            'hourly': '⏰ Каждый час'
+        }
+        
+        if schedule_type == 'once':
+            time_display = datetime.fromisoformat(schedule_time).strftime('%d.%m.%Y в %H:%M')
+        elif schedule_type == 'daily':
+            time_display = f"Ежедневно в {schedule_time}"
+        else:
+            time_display = "Каждый час"
+        
+        await query.edit_message_text(
+            f"✅ *Расписание создано!*\n\n"
+            f"📨 Тип: {type_names.get(schedule_type)}\n"
+            f"⏰ Время: {time_display}\n"
+            f"🎯 Чатов: {len(targets)}\n"
+            f"👥 Аккаунтов: {len(accounts)}\n\n"
+            f"ID расписания: #{schedule_id}",
+            parse_mode='Markdown',
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("📋 Мои расписания", callback_data='my_schedules')
+            ]])
+        )
+    else:
+        await query.edit_message_text(
+            "❌ Ошибка создания расписания!\nПопробуйте позже.",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("◀️ Назад", callback_data='schedule_menu')
+            ]])
+        )
+    
+    context.user_data.clear()
+    return ConversationHandler.END
+
+async def schedule_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Отмена создания расписания"""
+    query = update.callback_query
+    await query.answer()
+    
+    context.user_data.clear()
+    
+    await query.edit_message_text(
+        "❌ Создание расписания отменено",
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("◀️ В меню", callback_data='back_to_menu')
+        ]])
+    )
+    
+    return ConversationHandler.END
+
 async def my_schedules(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Список запланированных рассылок"""
+    """Показать мои расписания"""
     query = update.callback_query
     await query.answer()
     
@@ -873,91 +1299,142 @@ async def my_schedules(update: Update, context: ContextTypes.DEFAULT_TYPE):
     schedules = db.get_user_scheduled_mailings(user_id)
     
     if not schedules:
-        keyboard = [[InlineKeyboardButton("◀️ Назад", callback_data='schedule_menu')]]
         await query.edit_message_text(
-            "📋 У вас нет запланированных рассылок",
-            reply_markup=InlineKeyboardMarkup(keyboard)
+            "📋 *Мои расписания*\n\n"
+            "У вас пока нет активных расписаний",
+            parse_mode='Markdown',
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("➕ Создать", callback_data='create_schedule'),
+                InlineKeyboardButton("◀️ Назад", callback_data='schedule_menu')
+            ]])
         )
         return
     
-    text = "📋 *Ваши запланированные рассылки:*\n\n"
+    schedules_text = "📋 *Мои расписания:*\n\n"
     keyboard = []
     
-    for idx, schedule in enumerate(schedules, 1):
-        targets_count = len(schedule['targets'])
-        text += f"{idx}. 📨 {targets_count} чатов\n"
-        
-        keyboard.append([
-            InlineKeyboardButton(
-                f"{idx}. Рассылка",
-                callback_data=f"schedule_detail_{schedule['id']}"
-            )
-        ])
+    type_names = {
+        'once': '🔂 Один раз',
+        'daily': '📅 Ежедневно',
+        'hourly': '⏰ Каждый час'
+    }
     
-    keyboard.append([InlineKeyboardButton("◀️ Назад", callback_data='schedule_menu')])
+    for idx, schedule in enumerate(schedules, 1):
+        schedule_type = schedule.get('schedule_type', 'unknown')
+        schedule_time = schedule.get('schedule_time')
+        
+        if schedule_type == 'once':
+            time_display = datetime.fromisoformat(schedule_time).strftime('%d.%m %H:%M')
+        elif schedule_type == 'daily':
+            time_display = schedule_time
+        else:
+            time_display = "Каждый час"
+        
+        schedules_text += (
+            f"{idx}. {type_names.get(schedule_type, 'Неизвестно')}\n"
+            f"   ⏰ {time_display}\n"
+            f"   🎯 Чатов: {len(schedule.get('targets', []))}\n\n"
+        )
+        
+        keyboard.append([InlineKeyboardButton(
+            f"#{schedule['id']} - {type_names.get(schedule_type)}",
+            callback_data=f"schedule_detail_{schedule['id']}"
+        )])
+    
+    keyboard.append([
+        InlineKeyboardButton("➕ Создать новое", callback_data='create_schedule'),
+        InlineKeyboardButton("◀️ Назад", callback_data='schedule_menu')
+    ])
     
     await query.edit_message_text(
-        text,
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode='Markdown'
+        schedules_text,
+        parse_mode='Markdown',
+        reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
 async def schedule_detail(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Детали запланированной рассылки"""
+    """Детали расписания"""
     query = update.callback_query
     await query.answer()
     
-    schedule_id = int(query.data.split('_')[2])
-    schedules = db.get_user_scheduled_mailings(update.effective_user.id)
+    schedule_id = int(query.data.split('_')[-1])
+    user_id = update.effective_user.id
+    
+    # Получаем все расписания и фильтруем
+    schedules = db.get_user_scheduled_mailings(user_id)
     schedule = next((s for s in schedules if s['id'] == schedule_id), None)
     
     if not schedule:
-        await query.edit_message_text("❌ Расписание не найдено")
+        await query.answer("❌ Расписание не найдено", show_alert=True)
         return
     
-    message_preview = schedule['message_text'] or schedule['message_caption'] or "[Медиа]"
-    message_preview = message_preview[:50] + "..." if len(message_preview) > 50 else message_preview
+    type_names = {
+        'once': '🔂 Один раз',
+        'daily': '📅 Ежедневно',
+        'hourly': '⏰ Каждый час'
+    }
     
-    text = (
-        f"📋 *Детали рассылки #{schedule['id']}*\n\n"
-        f"📨 Сообщение: {message_preview}\n"
-        f"🎯 Чатов: {len(schedule['targets'])}\n"
-        f"📅 Создано: {schedule['created_at'][:16]}\n"
+    schedule_type = schedule.get('schedule_type', 'unknown')
+    schedule_time = schedule.get('schedule_time')
+    
+    if schedule_type == 'once':
+        time_display = datetime.fromisoformat(schedule_time).strftime('%d.%m.%Y в %H:%M')
+    elif schedule_type == 'daily':
+        time_display = f"Ежедневно в {schedule_time}"
+    else:
+        time_display = "Каждый час"
+    
+    last_run = schedule.get('last_run')
+    last_run_display = "Ещё не запускалось"
+    if last_run:
+        last_run_display = datetime.fromisoformat(last_run).strftime('%d.%m.%Y %H:%M')
+    
+    detail_text = (
+        f"📋 *Расписание #{schedule['id']}*\n\n"
+        f"📨 Тип: {type_names.get(schedule_type, 'Неизвестно')}\n"
+        f"⏰ Время: {time_display}\n"
+        f"🎯 Чатов: {len(schedule.get('targets', []))}\n"
+        f"👥 Аккаунтов: {len(schedule.get('account_ids', []))}\n"
+        f"📅 Последний запуск: {last_run_display}\n"
+        f"📅 Создано: {schedule['created_at'][:16]}"
     )
     
-    if schedule['last_run']:
-        text += f"⏰ Последний запуск: {schedule['last_run'][:16]}\n"
-    
     keyboard = [
-        [InlineKeyboardButton("🗑️ Удалить", callback_data=f"delete_schedule_{schedule_id}")],
+        [InlineKeyboardButton("🗑 Удалить", callback_data=f"delete_schedule_{schedule_id}")],
         [InlineKeyboardButton("◀️ Назад", callback_data='my_schedules')]
     ]
     
     await query.edit_message_text(
-        text,
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode='Markdown'
+        detail_text,
+        parse_mode='Markdown',
+        reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
 async def delete_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Удаление запланированной рассылки"""
+    """Удаление расписания"""
     query = update.callback_query
     await query.answer()
     
-    schedule_id = int(query.data.split('_')[2])
-    
-    # Удаляем из планировщика
-    mailing_scheduler.remove_job(schedule_id)
+    schedule_id = int(query.data.split('_')[-1])
     
     # Удаляем из БД
-    db.delete_scheduled_mailing(schedule_id)
-    
-    await query.edit_message_text(
-        "✅ Запланированная рассылка удалена!",
-        reply_markup=InlineKeyboardMarkup([[
-            InlineKeyboardButton("◀️ К расписаниям", callback_data='my_schedules')
-        ]])
-    )
+    if db.delete_scheduled_mailing(schedule_id):
+        # Удаляем из планировщика
+        mailing_scheduler.remove_job(schedule_id)
+        
+        await query.edit_message_text(
+            f"✅ Расписание #{schedule_id} удалено",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("◀️ К расписаниям", callback_data='my_schedules')
+            ]])
+        )
+    else:
+        await query.edit_message_text(
+            "❌ Ошибка удаления расписания",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("◀️ Назад", callback_data='my_schedules')
+            ]])
+        )
 
 # ==================== ВЫБОР АККАУНТОВ ДЛЯ РАССЫЛКИ ====================
 
@@ -1235,13 +1712,31 @@ async def start_user_mailing(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await query.edit_message_text("❌ Ошибка: данные не найдены")
         return ConversationHandler.END
     
+    # Проверяем лимиты
+    limits = check_user_limits(user_id, 'mailing')
+    if not limits['allowed']:
+        await query.edit_message_text(
+            f"⚠️ {limits['reason']}\n\n"
+            f"💎 Обновите тариф для продолжения работы",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("💎 Тарифы", callback_data="view_tariffs")
+            ]])
+        )
+        return ConversationHandler.END
+    
     # Получаем аккаунты
     if not selected_accounts:
         accounts = db.get_user_accounts(user_id)
         selected_accounts = [acc['id'] for acc in accounts]
     
     if not selected_accounts:
-        await query.edit_message_text("❌ Нет активных аккаунтов")
+        await query.edit_message_text(
+            "❌ Нет активных аккаунтов\n\n"
+            "Добавьте хотя бы один аккаунт для рассылки",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("➕ Добавить", callback_data="connect_userbot")
+            ]])
+        )
         return ConversationHandler.END
     
     accounts_data = [db.get_account(acc_id) for acc_id in selected_accounts]
@@ -1257,149 +1752,222 @@ async def start_user_mailing(update: Update, context: ContextTypes.DEFAULT_TYPE)
         f"👥 Аккаунтов: {len(accounts_data)}\n"
         f"🎯 Чатов: {len(targets)}\n"
         f"📊 На аккаунт: ~{len(targets) // len(accounts_data)}\n\n"
-        f"⏳ Идёт рассылка...",
+        f"⏳ Подготовка...",
         parse_mode='Markdown'
     )
     
-    # Распределяем таргеты по аккаунтам
-    targets_per_account = len(targets) // len(accounts_data)
-    remainder = len(targets) % len(accounts_data)
-    
-    total_sent = 0
-    total_errors = 0
-    start_time = datetime.now()
-    
-    start_idx = 0
-    for idx, account in enumerate(accounts_data):
-        # Распределяем таргеты
-        end_idx = start_idx + targets_per_account + (1 if idx < remainder else 0)
-        account_targets = targets[start_idx:end_idx]
-        start_idx = end_idx
-        
-        if not account_targets:
-            continue
-        
-        # Обновляем прогресс
-        elapsed = (datetime.now() - start_time).seconds
-        remaining_accounts = len(accounts_data) - idx
-        estimated_remaining = (elapsed / (idx + 1)) * remaining_accounts if idx > 0 else 0
-        
-        await progress_message.edit_text(
-            f"📨 *Рассылка:*\n\n"
-            f"🔄 Аккаунт {idx + 1}/{len(accounts_data)}\n"
-            f"📱 {account['account_name']}\n"
-            f"🎯 Чатов: {len(account_targets)}\n\n"
-            f"✅ Отправлено: {total_sent}\n"
-            f"❌ Ошибок: {total_errors}\n"
-            f"⏱ Прошло: {elapsed // 60} мин {elapsed % 60} сек\n"
-            f"⏳ Осталось: ~{int(estimated_remaining // 60)} мин",
-            parse_mode='Markdown'
+    # ✅ ЗАПУСКАЕМ РАССЫЛКУ В ФОНЕ (НЕ БЛОКИРУЕМ БОТА)
+    asyncio.create_task(
+        run_mailing_background(
+            user_id, accounts_data, targets, mailing_message, 
+            context, progress_message
         )
-        
-        # Запускаем рассылку для этого аккаунта
-        sent, errors = await run_single_account_mailing(
-            account, account_targets, mailing_message, context
-        )
-        
-        total_sent += sent
-        total_errors += errors
-        
-        # Задержка между аккаунтами
-        if idx < len(accounts_data) - 1:
-            await asyncio.sleep(10)
-    
-    total_time = (datetime.now() - start_time).seconds
-    success_rate = int((total_sent / len(targets)) * 100) if targets else 0
-    
-    await progress_message.edit_text(
-        f"✅ *Рассылка завершена!*\n\n"
-        f"📊 *Статистика:*\n\n"
-        f"👥 Использовано аккаунтов: {len(accounts_data)}\n"
-        f"✅ Отправлено: {total_sent}/{len(targets)}\n"
-        f"❌ Ошибок: {total_errors}\n"
-        f"📈 Успешность: {success_rate}%\n"
-        f"⏱ Время: {total_time // 60} мин {total_time % 60} сек",
-        parse_mode='Markdown',
-        reply_markup=get_main_menu_keyboard(user_id)
     )
     
+    # Очищаем данные и завершаем диалог
     context.user_data.clear()
     return ConversationHandler.END
 
+
+async def run_mailing_background(user_id: int, accounts_data: list, targets: list, 
+                                mailing_message, context, progress_message):
+    """Фоновая рассылка (не блокирует бота для других пользователей)"""
+    
+    try:
+        # Распределяем таргеты по аккаунтам
+        targets_per_account = len(targets) // len(accounts_data)
+        remainder = len(targets) % len(accounts_data)
+        
+        total_sent = 0
+        total_errors = 0
+        start_time = datetime.now()
+        
+        start_idx = 0
+        for idx, account in enumerate(accounts_data):
+            # Распределяем таргеты
+            end_idx = start_idx + targets_per_account + (1 if idx < remainder else 0)
+            account_targets = targets[start_idx:end_idx]
+            start_idx = end_idx
+            
+            if not account_targets:
+                continue
+            
+            # Обновляем прогресс
+            try:
+                elapsed = (datetime.now() - start_time).seconds
+                remaining_accounts = len(accounts_data) - idx
+                estimated_remaining = (elapsed / (idx + 1)) * remaining_accounts if idx > 0 else 0
+                
+                await progress_message.edit_text(
+                    f"📨 *Рассылка:*\n\n"
+                    f"🔄 Аккаунт {idx + 1}/{len(accounts_data)}\n"
+                    f"📱 {account['account_name']}\n"
+                    f"🎯 Чатов на этом аккаунте: {len(account_targets)}\n\n"
+                    f"✅ Отправлено всего: {total_sent}/{len(targets)}\n"
+                    f"❌ Ошибок: {total_errors}\n"
+                    f"⏱ Прошло: {elapsed // 60} мин {elapsed % 60} сек\n"
+                    f"⏳ Осталось: ~{int(estimated_remaining // 60)} мин",
+                    parse_mode='Markdown'
+                )
+            except Exception as e:
+                logger.error(f"Error updating progress: {e}")
+            
+            # Запускаем рассылку для этого аккаунта
+            sent, errors = await run_single_account_mailing(
+                account, account_targets, mailing_message, context
+            )
+            
+            total_sent += sent
+            total_errors += errors
+            
+            # Задержка между аккаунтами (чтобы не палить)
+            if idx < len(accounts_data) - 1:
+                await asyncio.sleep(10)
+        
+        # Рассылка завершена - итоговая статистика
+        total_time = (datetime.now() - start_time).seconds
+        success_rate = int((total_sent / len(targets)) * 100) if targets else 0
+        
+        # Сохраняем в историю
+        message_preview = mailing_message.text[:50] if mailing_message.text else '[Медиа]'
+        db.add_mailing(user_id, message_preview, total_sent, total_errors)
+        
+        try:
+            await progress_message.edit_text(
+                f"✅ *Рассылка завершена!*\n\n"
+                f"📊 *Статистика:*\n\n"
+                f"👥 Использовано аккаунтов: {len(accounts_data)}\n"
+                f"✅ Отправлено: {total_sent}/{len(targets)}\n"
+                f"❌ Ошибок: {total_errors}\n"
+                f"📈 Успешность: {success_rate}%\n"
+                f"⏱ Время: {total_time // 60} мин {total_time % 60} сек\n\n"
+                f"💡 Рассылка сохранена в истории",
+                parse_mode='Markdown',
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("📜 История", callback_data="mailing_history"),
+                    InlineKeyboardButton("🏠 Меню", callback_data="back_to_menu")
+                ]])
+            )
+        except Exception as e:
+            logger.error(f"Error sending final message: {e}")
+    
+    except Exception as e:
+        logger.error(f"Background mailing error: {e}")
+        try:
+            await progress_message.edit_text(
+                f"❌ *Ошибка рассылки!*\n\n"
+                f"Произошла ошибка при выполнении рассылки.\n"
+                f"Обратитесь в поддержку.",
+                parse_mode='Markdown',
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("💬 Поддержка", callback_data="support")
+                ]])
+            )
+        except:
+            pass
+
+
 async def run_single_account_mailing(account: dict, targets: list, mailing_message, context):
     """Рассылка с одного аккаунта"""
+    
     session_id = account['session_id']
     phone = account['phone_number']
-    user_id = account['user_id']
-    
-    connect_result = await userbot_manager.connect_session(phone, session_id)
-    if not connect_result['success']:
-        return 0, len(targets)
     
     sent = 0
     errors = 0
     
-    # Фаза 1: Вступление в чаты (без уведомления)
-    for target in targets:
-        try:
-            await userbot_manager.join_chat(session_id, phone, target)
-            await asyncio.sleep(2)
-        except:
-            pass
-    
-    await asyncio.sleep(10)
-    
-    # Фаза 2: Отправка сообщений
-    for target in targets:
-        try:
-            if mailing_message.text:
-                result = await userbot_manager.send_message(
-                    session_id, phone, target, mailing_message.text
-                )
-            elif mailing_message.photo:
-                photo = mailing_message.photo[-1]
-                file = await context.bot.get_file(photo.file_id)
-                photo_path = f"temp_{user_id}_{photo.file_id}.jpg"
-                await file.download_to_drive(photo_path)
+    try:
+        # Подключаем сессию
+        connect_result = await userbot_manager.connect_session(phone, session_id)
+        if not connect_result['success']:
+            logger.error(f"Failed to connect account {phone}: {connect_result.get('error')}")
+            return 0, len(targets)
+        
+        logger.info(f"✅ Connected account {phone} for mailing")
+        
+        # ФАЗА 1: Вступление в чаты (быстро, без задержек)
+        logger.info(f"📥 Phase 1: Joining {len(targets)} chats...")
+        for target in targets:
+            try:
+                await userbot_manager.join_chat(session_id, phone, target)
+                await asyncio.sleep(1)  # Минимальная задержка
+            except Exception as e:
+                logger.debug(f"Join error {target}: {e}")
+        
+        # Пауза между фазами
+        await asyncio.sleep(10)
+        
+        # ФАЗА 2: Отправка сообщений (с задержками)
+        logger.info(f"📤 Phase 2: Sending messages to {len(targets)} chats...")
+        
+        for idx, target in enumerate(targets, 1):
+            try:
+                # Определяем тип сообщения
+                if mailing_message.text:
+                    # Текстовое сообщение
+                    result = await userbot_manager.send_message(
+                        session_id, phone, target, mailing_message.text
+                    )
+                    
+                elif mailing_message.photo:
+                    # Фото
+                    photo_file = await context.bot.get_file(mailing_message.photo[-1].file_id)
+                    photo_path = f"temp_photo_{phone}_{idx}.jpg"
+                    await photo_file.download_to_drive(photo_path)
+                    
+                    result = await userbot_manager.send_photo(
+                        session_id, phone, target, photo_path, 
+                        mailing_message.caption
+                    )
+                    
+                    # Удаляем временный файл
+                    try:
+                        import os
+                        os.remove(photo_path)
+                    except:
+                        pass
+                    
+                elif mailing_message.video:
+                    # Видео
+                    video_file = await context.bot.get_file(mailing_message.video.file_id)
+                    video_path = f"temp_video_{phone}_{idx}.mp4"
+                    await video_file.download_to_drive(video_path)
+                    
+                    result = await userbot_manager.send_video(
+                        session_id, phone, target, video_path,
+                        mailing_message.caption
+                    )
+                    
+                    # Удаляем временный файл
+                    try:
+                        import os
+                        os.remove(video_path)
+                    except:
+                        pass
+                else:
+                    result = {'success': False}
                 
-                result = await userbot_manager.send_photo(
-                    session_id, phone, target, photo_path,
-                    caption=mailing_message.caption or ""
-                )
+                # Проверяем результат
+                if result.get('success'):
+                    sent += 1
+                    logger.debug(f"✅ Sent to {target} ({sent}/{len(targets)})")
+                else:
+                    errors += 1
+                    logger.debug(f"❌ Failed to {target}: {result.get('error')}")
                 
-                import os
-                if os.path.exists(photo_path):
-                    os.remove(photo_path)
-            
-            elif mailing_message.video:
-                video = mailing_message.video
-                file = await context.bot.get_file(video.file_id)
-                video_path = f"temp_{user_id}_{video.file_id}.mp4"
-                await file.download_to_drive(video_path)
+                # Задержка между сообщениями (антибан)
+                await asyncio.sleep(5)
                 
-                result = await userbot_manager.send_video(
-                    session_id, phone, target, video_path,
-                    caption=mailing_message.caption or ""
-                )
-                
-                import os
-                if os.path.exists(video_path):
-                    os.remove(video_path)
-            
-            if result.get('success'):
-                sent += 1
-            else:
+            except Exception as e:
                 errors += 1
-            
-            await asyncio.sleep(MAILING_DELAY)
-            
-        except Exception as e:
-            errors += 1
-            logger.error(f"Error sending to {target}: {e}")
-    
-    # Сохраняем в историю
-    message_text = mailing_message.text or mailing_message.caption or "[Медиа]"
-    db.add_mailing(user_id, message_text, sent, errors)
+                logger.error(f"Error sending to {target}: {e}")
+                await asyncio.sleep(3)
+        
+        logger.info(f"✅ Account {phone} completed: {sent} sent, {errors} errors")
+        
+    except Exception as e:
+        logger.error(f"Account {phone} mailing error: {e}")
+        errors = len(targets)
     
     return sent, errors
 
@@ -1997,6 +2565,38 @@ def main():
     application.add_handler(CallbackQueryHandler(admin_menu_callback, pattern='^admin_menu$'))
     application.add_handler(CallbackQueryHandler(approve_payment, pattern=r'^approve_payment_\d+$'))
     application.add_handler(CallbackQueryHandler(reject_payment, pattern=r'^reject_payment_\d+$'))
+
+    # Планировщик
+    schedule_handler = ConversationHandler(
+        entry_points=[CallbackQueryHandler(create_schedule_start, pattern='^create_schedule$')],
+        states={
+            SCHEDULE_TARGETS: [MessageHandler(filters.TEXT & ~filters.COMMAND, schedule_targets_received)],
+            SCHEDULE_ACCOUNTS: [
+                CallbackQueryHandler(schedule_toggle_account, pattern=r'^sched_toggle_\d+$'),
+                CallbackQueryHandler(schedule_select_all_accounts, pattern='^sched_select_all$'),
+                CallbackQueryHandler(schedule_deselect_all_accounts, pattern='^sched_deselect_all$'),
+                CallbackQueryHandler(schedule_accounts_done, pattern='^sched_accounts_done$')
+            ],
+            SCHEDULE_MESSAGE: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, schedule_message_received),
+                MessageHandler(filters.PHOTO, schedule_message_received),
+                MessageHandler(filters.VIDEO, schedule_message_received)
+            ],
+            SCHEDULE_TYPE: [
+                CallbackQueryHandler(schedule_type_selected, pattern='^sched_type_')
+            ],
+            SCHEDULE_TIME: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, schedule_time_received)
+            ],
+            SCHEDULE_CONFIRM: [
+                CallbackQueryHandler(schedule_confirm_create, pattern='^confirm_schedule$'),
+                CallbackQueryHandler(schedule_cancel, pattern='^cancel_schedule$')
+            ]
+        },
+        fallbacks=[CommandHandler('cancel', cancel)]
+    )
+    
+    application.add_handler(schedule_handler)
     
     # Запуск
     logger.info("🤖 Bot starting...")

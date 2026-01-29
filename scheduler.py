@@ -2,155 +2,129 @@
 # -*- coding: utf-8 -*-
 
 """
-Планировщик для автоматических рассылок
+Scheduler module for automatic mailings
 """
 
-import asyncio
 import logging
+import asyncio
 from datetime import datetime, timedelta
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
-from database import Database
-from userbot import UserbotManager
+from apscheduler.triggers.date import DateTrigger
 
 logger = logging.getLogger(__name__)
 
 class MailingScheduler:
-    """Планировщик рассылок"""
-    
-    def __init__(self, db: Database, userbot_manager: UserbotManager):
-        """Инициализация"""
+    def __init__(self, db, userbot_manager, bot):
+        """Инициализация планировщика"""
         self.db = db
         self.userbot_manager = userbot_manager
+        self.bot = bot
         self.scheduler = AsyncIOScheduler()
         logger.info("📅 MailingScheduler initialized")
     
     def start(self):
         """Запуск планировщика"""
-        self.scheduler.start()
-        self.load_scheduled_mailings()
-        logger.info("✅ Scheduler started")
+        try:
+            self.scheduler.start()
+            self.load_scheduled_mailings()
+            logger.info("✅ Scheduler started")
+        except Exception as e:
+            logger.error(f"Error starting scheduler: {e}")
     
     def stop(self):
         """Остановка планировщика"""
-        self.scheduler.shutdown()
-        logger.info("❌ Scheduler stopped")
+        try:
+            if self.scheduler.running:
+                self.scheduler.shutdown()
+                logger.info("⏹ Scheduler stopped")
+        except Exception as e:
+            logger.error(f"Error stopping scheduler: {e}")
     
     def load_scheduled_mailings(self):
-        """Загрузка всех запланированных рассылок"""
-        mailings = self.db.get_active_scheduled_mailings()
-        logger.info(f"📋 Loading {len(mailings)} scheduled mailings")
-        
-        for mailing in mailings:
-            self.add_job(mailing)
-    
-    def add_job(self, mailing: dict):
-        """Добавление задачи в планировщик"""
+        """Загрузить все активные запланированные рассылки"""
         try:
-            schedule_data = mailing['schedule_data']
-            schedule_type = mailing['schedule_type']
+            mailings = self.db.get_active_scheduled_mailings()
             
-            if schedule_type == 'weekly':
-                # Еженедельная рассылка
-                for day_time in schedule_data['times']:
-                    day_of_week = day_time['day']  # 0=Monday, 6=Sunday
-                    time_str = day_time['time']  # "HH:MM"
-                    hour, minute = map(int, time_str.split(':'))
-                    
-                    trigger = CronTrigger(
-                        day_of_week=day_of_week,
-                        hour=hour,
-                        minute=minute
-                    )
-                    
-                    self.scheduler.add_job(
-                        self.execute_mailing,
-                        trigger=trigger,
-                        args=[mailing['id']],
-                        id=f"mailing_{mailing['id']}_{day_of_week}_{time_str}",
-                        replace_existing=True
-                    )
-                    
-                    logger.info(f"✅ Added job: Day {day_of_week} at {time_str}")
+            for mailing in mailings:
+                self.add_job(mailing)
             
+            logger.info(f"✅ Loaded {len(mailings)} scheduled mailings")
+        except Exception as e:
+            logger.error(f"Error loading scheduled mailings: {e}")
+    
+    def add_job(self, mailing_data: dict):
+        """Добавить задачу в планировщик"""
+        try:
+            job_id = f"mailing_{mailing_data['id']}"
+            schedule_type = mailing_data.get('schedule_type', 'once')
+            schedule_time = mailing_data.get('schedule_time')
+            
+            # Удаляем старую задачу если есть
+            if self.scheduler.get_job(job_id):
+                self.scheduler.remove_job(job_id)
+            
+            if schedule_type == 'once':
+                # Разовая рассылка
+                run_date = datetime.fromisoformat(schedule_time)
+                trigger = DateTrigger(run_date=run_date)
+                
             elif schedule_type == 'daily':
                 # Ежедневная рассылка
-                for time_str in schedule_data['times']:
-                    hour, minute = map(int, time_str.split(':'))
-                    
-                    trigger = CronTrigger(
-                        hour=hour,
-                        minute=minute
-                    )
-                    
-                    self.scheduler.add_job(
-                        self.execute_mailing,
-                        trigger=trigger,
-                        args=[mailing['id']],
-                        id=f"mailing_{mailing['id']}_{time_str}",
-                        replace_existing=True
-                    )
-                    
-                    logger.info(f"✅ Added daily job at {time_str}")
+                hour, minute = schedule_time.split(':')
+                trigger = CronTrigger(hour=int(hour), minute=int(minute))
+                
+            elif schedule_type == 'hourly':
+                # Каждый час
+                trigger = CronTrigger(minute=0)
+                
+            else:
+                logger.warning(f"Unknown schedule type: {schedule_type}")
+                return
             
-            elif schedule_type == 'once':
-                # Одноразовая рассылка
-                run_date = datetime.fromisoformat(schedule_data['datetime'])
-                
-                self.scheduler.add_job(
-                    self.execute_mailing,
-                    trigger='date',
-                    run_date=run_date,
-                    args=[mailing['id']],
-                    id=f"mailing_{mailing['id']}_once",
-                    replace_existing=True
-                )
-                
-                logger.info(f"✅ Added one-time job at {run_date}")
-        
+            # Добавляем задачу
+            self.scheduler.add_job(
+                self.execute_mailing,
+                trigger=trigger,
+                id=job_id,
+                args=[mailing_data],
+                replace_existing=True
+            )
+            
+            logger.info(f"✅ Job added: {job_id} ({schedule_type})")
+            
         except Exception as e:
-            logger.error(f"❌ Error adding job: {e}")
+            logger.error(f"Error adding job: {e}")
     
-    async def execute_mailing(self, mailing_id: int):
-        """Выполнение рассылки"""
+    async def execute_mailing(self, mailing_data: dict):
+        """Выполнить запланированную рассылку"""
         try:
-            logger.info(f"🚀 Executing scheduled mailing {mailing_id}")
+            user_id = mailing_data['user_id']
+            targets = mailing_data.get('targets', [])
+            account_ids = mailing_data.get('account_ids', [])
             
-            # Получаем данные рассылки
-            mailings = self.db.get_active_scheduled_mailings()
-            mailing = next((m for m in mailings if m['id'] == mailing_id), None)
+            logger.info(f"🚀 Executing scheduled mailing #{mailing_data['id']}")
             
-            if not mailing:
-                logger.error(f"❌ Mailing {mailing_id} not found")
+            # Получаем аккаунты
+            accounts = []
+            for acc_id in account_ids:
+                account = self.db.get_account(acc_id)
+                if account and account['is_active']:
+                    accounts.append(account)
+            
+            if not accounts:
+                logger.warning(f"No active accounts for mailing #{mailing_data['id']}")
                 return
             
-            user_id = mailing['user_id']
-            targets = mailing['targets']
-            selected_accounts = mailing['selected_accounts']
+            # Распределяем таргеты
+            targets_per_account = len(targets) // len(accounts)
+            remainder = len(targets) % len(accounts)
             
-            # Если аккаунты не выбраны - берём все активные
-            if not selected_accounts:
-                accounts = self.db.get_user_accounts(user_id)
-                selected_accounts = [acc['id'] for acc in accounts]
-            
-            if not selected_accounts:
-                logger.error(f"❌ No accounts found for user {user_id}")
-                return
-            
-            # Распределяем таргеты по аккаунтам
-            accounts_data = [self.db.get_account(acc_id) for acc_id in selected_accounts]
-            accounts_data = [acc for acc in accounts_data if acc]
-            
-            if not accounts_data:
-                logger.error(f"❌ No valid accounts")
-                return
-            
-            targets_per_account = len(targets) // len(accounts_data)
-            remainder = len(targets) % len(accounts_data)
+            total_sent = 0
+            total_errors = 0
             
             start_idx = 0
-            for idx, account in enumerate(accounts_data):
-                # Распределяем таргеты
+            for idx, account in enumerate(accounts):
                 end_idx = start_idx + targets_per_account + (1 if idx < remainder else 0)
                 account_targets = targets[start_idx:end_idx]
                 start_idx = end_idx
@@ -158,113 +132,95 @@ class MailingScheduler:
                 if not account_targets:
                     continue
                 
-                # Запускаем рассылку для этого аккаунта
-                await self.run_account_mailing(account, account_targets, mailing)
+                # Выполняем рассылку
+                sent, errors = await self._run_account_mailing(
+                    account, account_targets, mailing_data
+                )
                 
-                # Задержка между аккаунтами
-                await asyncio.sleep(5)
+                total_sent += sent
+                total_errors += errors
+                
+                await asyncio.sleep(10)
             
             # Обновляем время последнего запуска
-            self.db.update_scheduled_mailing_last_run(mailing_id)
-            logger.info(f"✅ Scheduled mailing {mailing_id} completed")
+            self.db.update_scheduled_mailing_run(mailing_data['id'])
+            
+            # Сохраняем в историю
+            message_text = mailing_data.get('message_text') or '[Медиа]'
+            self.db.add_mailing(user_id, message_text, total_sent, total_errors)
+            
+            # Уведомляем пользователя
+            await self.bot.send_message(
+                chat_id=user_id,
+                text=f"✅ *Запланированная рассылка выполнена!*\n\n"
+                     f"📨 Отправлено: {total_sent}\n"
+                     f"❌ Ошибок: {total_errors}",
+                parse_mode='Markdown'
+            )
+            
+            logger.info(f"✅ Mailing #{mailing_data['id']} completed: {total_sent} sent, {total_errors} errors")
+            
+            # Если разовая рассылка - деактивируем
+            if mailing_data.get('schedule_type') == 'once':
+                self.db.delete_scheduled_mailing(mailing_data['id'])
+                self.remove_job(mailing_data['id'])
             
         except Exception as e:
-            logger.error(f"❌ Error executing mailing {mailing_id}: {e}")
-            import traceback
-            logger.error(traceback.format_exc())
+            logger.error(f"Error executing mailing: {e}")
     
-    async def run_account_mailing(self, account: dict, targets: list, mailing: dict):
+    async def _run_account_mailing(self, account: dict, targets: list, mailing_data: dict):
         """Рассылка с одного аккаунта"""
-        try:
-            session_id = account['session_id']
-            phone = account['phone_number']
-            account_name = account['account_name']
-            
-            logger.info(f"📨 Starting mailing from {account_name} ({phone})")
-            
-            # Подключаемся
-            connect_result = await self.userbot_manager.connect_session(phone, session_id)
-            if not connect_result['success']:
-                logger.error(f"❌ Failed to connect {account_name}")
-                return
-            
-            sent = 0
-            errors = 0
-            
-            # Фаза 1: Вступление
-            for target in targets:
-                try:
-                    join_result = await self.userbot_manager.join_chat(
-                        session_id=session_id,
-                        phone=phone,
-                        target=target
+        session_id = account['session_id']
+        phone = account['phone_number']
+        
+        connect_result = await self.userbot_manager.connect_session(phone, session_id)
+        if not connect_result['success']:
+            return 0, len(targets)
+        
+        sent = 0
+        errors = 0
+        
+        # Фаза 1: Вступление
+        for target in targets:
+            try:
+                await self.userbot_manager.join_chat(session_id, phone, target)
+                await asyncio.sleep(2)
+            except:
+                pass
+        
+        await asyncio.sleep(10)
+        
+        # Фаза 2: Отправка
+        for target in targets:
+            try:
+                message_text = mailing_data.get('message_text')
+                
+                if message_text:
+                    result = await self.userbot_manager.send_message(
+                        session_id, phone, target, message_text
                     )
-                    await asyncio.sleep(2)
-                except Exception as e:
-                    logger.error(f"Error joining {target}: {e}")
-            
-            # Пауза после вступлений
-            await asyncio.sleep(10)
-            
-            # Фаза 2: Отправка
-            for target in targets:
-                try:
-                    # Определяем тип сообщения
-                    if mailing['message_text']:
-                        result = await self.userbot_manager.send_message(
-                            session_id=session_id,
-                            phone=phone,
-                            target=target,
-                            message=mailing['message_text']
-                        )
-                    elif mailing['message_photo']:
-                        result = await self.userbot_manager.send_photo(
-                            session_id=session_id,
-                            phone=phone,
-                            target=target,
-                            photo_path=mailing['message_photo'],
-                            caption=mailing['message_caption'] or ""
-                        )
-                    elif mailing['message_video']:
-                        result = await self.userbot_manager.send_video(
-                            session_id=session_id,
-                            phone=phone,
-                            target=target,
-                            video_path=mailing['message_video'],
-                            caption=mailing['message_caption'] or ""
-                        )
-                    else:
-                        continue
                     
                     if result.get('success'):
                         sent += 1
                     else:
                         errors += 1
-                    
-                    await asyncio.sleep(5)
-                    
-                except Exception as e:
+                else:
                     errors += 1
-                    logger.error(f"Error sending to {target}: {e}")
-            
-            # Сохраняем статистику
-            message_text = mailing['message_text'] or mailing['message_caption'] or "[Медиа]"
-            self.db.add_mailing(account['user_id'], message_text, sent, errors)
-            
-            logger.info(f"✅ {account_name}: sent={sent}, errors={errors}")
-            
-        except Exception as e:
-            logger.error(f"❌ Error in account mailing: {e}")
-            import traceback
-            logger.error(traceback.format_exc())
+                
+                await asyncio.sleep(5)
+                
+            except Exception as e:
+                errors += 1
+                logger.error(f"Error sending to {target}: {e}")
+        
+        return sent, errors
     
-    def remove_job(self, mailing_id: int):
-        """Удаление задачи из планировщика"""
+    def remove_job(self, schedule_id: int):
+        """Удалить задачу"""
         try:
-            jobs = self.scheduler.get_jobs()
-            for job in jobs:
-                if str(mailing_id) in job.id:
-                    job.remove()
-                    logger.info(f"✅ Job removed: {job.id}")
+            job_id = f"mailing_{schedule_id}"
+            if self.scheduler.get_job(job_id):
+                self.scheduler.remove_job(job_id)
+                logger.info(f"🗑 Job {job_id} removed")
         except Exception as e:
-            logger.error(f"❌ Error removing job: {e}")
+            logger.error(f"Error removing job: {e}")
