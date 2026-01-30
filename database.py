@@ -36,88 +36,82 @@ class Database:
             conn.close()
     
     def _create_tables(self):
-        """Создание всех таблиц"""
-        with self._get_connection() as conn:
-            cursor = conn.cursor()
-            
-            # Таблица пользователей
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS users (
-                    user_id INTEGER PRIMARY KEY,
-                    username TEXT,
-                    subscription_plan TEXT DEFAULT 'trial',
-                    subscription_end TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    is_active INTEGER DEFAULT 1
-                )
-            """)
-            
-            # Таблица аккаунтов
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS accounts (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    user_id INTEGER NOT NULL,
-                    phone_number TEXT NOT NULL,
-                    session_id TEXT NOT NULL,
-                    account_name TEXT,
-                    is_active INTEGER DEFAULT 1,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (user_id) REFERENCES users(user_id)
-                )
-            """)
-            
-            # Таблица рассылок
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS mailings (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    user_id INTEGER NOT NULL,
-                    message TEXT,
-                    sent_count INTEGER DEFAULT 0,
-                    error_count INTEGER DEFAULT 0,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (user_id) REFERENCES users(user_id)
-                )
-            """)
-            
-            # Таблица запланированных рассылок
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS scheduled_mailings (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    user_id INTEGER NOT NULL,
-                    message_text TEXT,
-                    message_photo TEXT,
-                    message_video TEXT,
-                    message_caption TEXT,
-                    targets TEXT,
-                    account_ids TEXT,
-                    schedule_type TEXT,
-                    schedule_time TEXT,
-                    is_active INTEGER DEFAULT 1,
-                    last_run TIMESTAMP,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (user_id) REFERENCES users(user_id)
-                )
-            """)
-            
-            # Таблица платежей
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS payments (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    user_id INTEGER NOT NULL,
-                    plan_id TEXT NOT NULL,
-                    amount REAL NOT NULL,
-                    status TEXT DEFAULT 'pending',
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    approved_at TIMESTAMP,
-                    FOREIGN KEY (user_id) REFERENCES users(user_id)
-                )
-            """)
-            
-            # Проверяем и добавляем недостающие столбцы
-            self._migrate_tables(cursor)
-            
-            conn.commit()
-            logger.info("✅ Database tables created/updated successfully")
+    """Создание таблиц"""
+    cursor = self.conn.cursor()
+    
+    # Таблица пользователей
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY,
+            username TEXT,
+            subscription_plan TEXT DEFAULT 'trial',
+            subscription_end TIMESTAMP,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    
+    # Таблица аккаунтов
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS accounts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            phone TEXT,
+            session_id TEXT,
+            account_name TEXT,
+            is_active INTEGER DEFAULT 1,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users (id)
+        )
+    ''')
+    
+    # Таблица рассылок
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS mailings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            status TEXT,
+            targets TEXT,
+            message TEXT,
+            accounts_used INTEGER,
+            success_count INTEGER DEFAULT 0,
+            error_count INTEGER DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users (id)
+        )
+    ''')
+    
+    # Таблица расписаний
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS schedules (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            targets TEXT,
+            message TEXT,
+            accounts TEXT,
+            schedule_type TEXT,
+            schedule_time TEXT,
+            is_active INTEGER DEFAULT 1,
+            last_run TIMESTAMP,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users (id)
+        )
+    ''')
+    
+    # Таблица платежей
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS payments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            plan_id TEXT,
+            amount INTEGER,
+            status TEXT DEFAULT 'pending',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users (id)
+        )
+    ''')
+    
+    self.conn.commit()
+    logger.info("✅ Database tables created/updated successfully")
     
     def _migrate_tables(self, cursor):
         """Миграция существующих таблиц"""
@@ -493,33 +487,47 @@ class Database:
     
     # ==================== ПЛАТЕЖИ ====================
     
-    def add_payment(self, user_id: int, plan_id: str, amount: float) -> Optional[int]:
-        """Добавить платёж"""
-        try:
-            with self._get_connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute("""
-                    INSERT INTO payments (user_id, plan_id, amount, status)
-                    VALUES (?, ?, ?, 'pending')
-                """, (user_id, plan_id, amount))
-                payment_id = cursor.lastrowid
-                logger.info(f"✅ Payment created: #{payment_id} for user {user_id}")
-                return payment_id
-        except Exception as e:
-            logger.error(f"Error adding payment: {e}")
-            return None
+    def add_payment(self, user_id: int, plan_id: str, amount: int) -> int:
+    """Создать новый платеж"""
+    try:
+        cursor = self.conn.cursor()
+        cursor.execute('''
+            INSERT INTO payments (user_id, plan_id, amount, status, created_at)
+            VALUES (?, ?, ?, 'pending', ?)
+        ''', (user_id, plan_id, amount, datetime.now()))
+        
+        self.conn.commit()
+        payment_id = cursor.lastrowid
+        
+        logger.info(f"✅ Payment created: #{payment_id} for user {user_id}")
+        return payment_id
+    except Exception as e:
+        logger.error(f"Error creating payment: {e}")
+        return None
     
-    def get_payment(self, payment_id: int) -> Optional[Dict]:
-        """Получить платёж"""
-        try:
-            with self._get_connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute("SELECT * FROM payments WHERE id = ?", (payment_id,))
-                row = cursor.fetchone()
-                return dict(row) if row else None
-        except Exception as e:
-            logger.error(f"Error getting payment: {e}")
+    def get_payment(self, payment_id: int) -> dict:
+    """Получить данные платежа"""
+    try:
+        cursor = self.conn.cursor()
+        cursor.execute('''
+            SELECT * FROM payments WHERE id = ?
+        ''', (payment_id,))
+        
+        row = cursor.fetchone()
+        if not row:
             return None
+        
+        return {
+            'id': row[0],
+            'user_id': row[1],
+            'plan_id': row[2],
+            'amount': row[3],
+            'status': row[4],
+            'created_at': row[5]
+        }
+    except Exception as e:
+        logger.error(f"Error getting payment: {e}")
+        return None
     
     def get_pending_payments(self) -> List[Dict]:
         """Получить ожидающие платежи"""

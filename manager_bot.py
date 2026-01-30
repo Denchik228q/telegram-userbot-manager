@@ -630,6 +630,7 @@ async def payment_sent(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     payment_id = int(query.data.split('_')[1])  # paid_123 -> 123
     user_id = update.effective_user.id
+    username = update.effective_user.username or "не указан"
     
     # Получаем данные платежа
     payment = db.get_payment(payment_id)
@@ -668,16 +669,19 @@ async def payment_sent(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # Уведомляем админа
     plan = SUBSCRIPTIONS.get(payment['plan_id'])
-    user = db.get_user(user_id)
+    
+    if not plan:
+        logger.error(f"Plan {payment['plan_id']} not found")
+        return
     
     admin_text = (
         f"💰 *Новый платеж!*\n\n"
         f"🔢 ID: #{payment_id}\n"
-        f"👤 Пользователь: {user_id}\n"
-        f"👤 Username: @{user.get('username', 'не указан')}\n"
+        f"👤 User ID: `{user_id}`\n"
+        f"👤 Username: @{username}\n"
         f"💎 Тариф: {plan['name']}\n"
         f"💰 Сумма: {payment['amount']}₽\n"
-        f"📅 Дата: {payment['created_at']}\n\n"
+        f"📅 Дата: {datetime.now().strftime('%d.%m.%Y %H:%M')}\n\n"
         f"Проверьте оплату и подтвердите:"
     )
     
@@ -695,8 +699,9 @@ async def payment_sent(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode='Markdown'
         )
+        logger.info(f"✅ Admin notification sent for payment #{payment_id}")
     except Exception as e:
-        logger.error(f"Error sending admin notification: {e}")
+        logger.error(f"❌ Error sending admin notification: {e}")
 
 
 async def approve_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
