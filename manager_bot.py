@@ -2642,7 +2642,7 @@ def main():
     
     # Подключение юзербота
     connect_conv_handler = ConversationHandler(
-        entry_points=[CallbackQueryHandler(connect_userbot, pattern='^connect_userbot$')],
+        entry_points=[CallbackQueryHandler(connect_start, pattern='^connect_userbot$')],
         states={
             PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, phone_received)],
             CODE: [MessageHandler(filters.TEXT & ~filters.COMMAND, code_received)],
@@ -2672,7 +2672,8 @@ def main():
                 CallbackQueryHandler(cancel, pattern='^cancel_mailing$')
             ]
         },
-        fallbacks=[CommandHandler('cancel', cancel)]
+        fallbacks=[CommandHandler('cancel', cancel)],
+        per_message=False
     )
     application.add_handler(user_mailing_handler)
     
@@ -2703,7 +2704,8 @@ def main():
                 CallbackQueryHandler(schedule_cancel, pattern='^cancel_schedule$')
             ]
         },
-        fallbacks=[CommandHandler('cancel', cancel)]
+        fallbacks=[CommandHandler('cancel', cancel)],
+        per_message=False
     )
     application.add_handler(schedule_handler)
     
