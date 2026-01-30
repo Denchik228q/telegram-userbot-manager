@@ -83,20 +83,20 @@ userbot_manager = UserbotManager()
 
 # ==================== КЛАВИАТУРЫ ====================
 
-def get_main_menu_keyboard(user_id: int = None):
-    """Клавиатура главного меню"""
+def get_main_menu_keyboard(user_id: int) -> ReplyKeyboardMarkup:
+    """Создать клавиатуру главного меню"""
     keyboard = [
-        [InlineKeyboardButton("📨 Новая рассылка", callback_data='start_mailing')],
-        [InlineKeyboardButton("⏰ Планировщик", callback_data='schedule_menu')],
-        [InlineKeyboardButton("📱 Мои аккаунты", callback_data='accounts_menu')],
-        [InlineKeyboardButton("📊 История рассылок", callback_data='mailing_history')],
-        [
-            InlineKeyboardButton("👤 Мой статус", callback_data='my_status'),
-            InlineKeyboardButton("💎 Тарифы", callback_data='view_tariffs')
-        ],
-        [InlineKeyboardButton("ℹ️ Помощь", callback_data='help')]
+        ['📨 Создать рассылку', '📱 Мои аккаунты'],
+        ['⏰ Планировщик', '📜 История'],
+        ['📊 Мой статус', '💎 Тарифы'],
+        ['ℹ️ Помощь']
     ]
-    return InlineKeyboardMarkup(keyboard)
+    
+    # Добавляем админ кнопку
+    if user_id == ADMIN_ID:
+        keyboard.append(['⚙️ Админ'])
+    
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
 def get_subscription_keyboard():
     """Клавиатура подписки на канал"""
@@ -2742,6 +2742,198 @@ async def admin_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
         parse_mode='Markdown'
     )
 
+# ==================== ОБРАБОТЧИКИ КНОПОК МЕНЮ ====================
+
+async def accounts_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик кнопки 'Мои аккаунты'"""
+    await accounts_menu(update, context)
+
+
+async def create_mailing_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик кнопки 'Создать рассылку'"""
+    user_id = update.effective_user.id
+    
+    # Проверяем лимиты
+    limits = check_user_limits(user_id, 'mailing')
+    if not limits['allowed']:
+        await update.message.reply_text(
+            f"⚠️ {limits['reason']}",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("💎 Тарифы", callback_data="view_tariffs")
+            ]])
+        )
+        return ConversationHandler.END
+    
+    # Проверяем наличие аккаунтов
+    accounts = db.get_user_accounts(user_id)
+    if not accounts:
+        await update.message.reply_text(
+            "❌ У вас нет подключенных аккаунтов!\n\n"
+            "Сначала подключите хотя бы один аккаунт",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("➕ Добавить аккаунт", callback_data='connect_userbot'),
+                InlineKeyboardButton("🏠 Меню", callback_data='back_to_menu')
+            ]])
+        )
+        return ConversationHandler.END
+    
+    await update.message.reply_text(
+        "📨 *Создание рассылки*\n\n"
+        "Шаг 1: Отправьте список целевых чатов/каналов\n\n"
+        "Формат:\n"
+        "```\nhttps://t.me/example_chat\n"
+        "@example_channel\n"
+        "https://t.me/joinchat/XXXXX```\n\n"
+        "По одной ссылке на строку\n"
+        "Или /cancel для отмены",
+        parse_mode='Markdown'
+    )
+    
+    return MAILING_TARGETS
+
+
+async def schedule_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик кнопки 'Планировщик'"""
+    query_data = type('obj', (object,), {'data': 'schedule_menu'})()
+    fake_query = type('obj', (object,), {
+        'answer': lambda: None,
+        'edit_message_text': update.message.reply_text,
+        'data': 'schedule_menu'
+    })()
+    
+    fake_update = type('obj', (object,), {
+        'callback_query': fake_query,
+        'effective_user': update.effective_user
+    })()
+    
+    await schedule_mailing_menu(fake_update, context)
+
+
+async def history_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик кнопки 'История'"""
+    fake_query = type('obj', (object,), {
+        'answer': lambda: None,
+        'edit_message_text': update.message.reply_text
+    })()
+    
+    fake_update = type('obj', (object,), {
+        'callback_query': fake_query,
+        'effective_user': update.effective_user
+    })()
+    
+    await mailing_history(fake_update, context)
+
+
+async def status_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик кнопки 'Мой статус'"""
+    fake_query = type('obj', (object,), {
+        'answer': lambda: None,
+        'edit_message_text': update.message.reply_text
+    })()
+    
+    fake_update = type('obj', (object,), {
+        'callback_query': fake_query,
+        'effective_user': update.effective_user
+    })()
+    
+    await my_status_callback(fake_update, context)
+
+
+async def tariffs_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик кнопки 'Тарифы'"""
+    fake_query = type('obj', (object,), {
+        'answer': lambda: None,
+        'edit_message_text': update.message.reply_text
+    })()
+    
+    fake_update = type('obj', (object,), {
+        'callback_query': fake_query,
+        'effective_user': update.effective_user
+    })()
+    
+    await view_tariffs_callback(fake_update, context)
+
+
+async def help_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик кнопки 'Помощь'"""
+    fake_query = type('obj', (object,), {
+        'answer': lambda: None,
+        'edit_message_text': update.message.reply_text
+    })()
+    
+    fake_update = type('obj', (object,), {
+        'callback_query': fake_query,
+        'effective_user': update.effective_user
+    })()
+
+    await help_callback(fake_update, context)
+
+
+async def admin_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик кнопки 'Админ'"""
+    user_id = update.effective_user.id
+    
+    if user_id != ADMIN_ID:
+        await update.message.reply_text("❌ У вас нет доступа")
+        return
+    
+    fake_query = type('obj', (object,), {
+        'answer': lambda: None,
+        'edit_message_text': update.message.reply_text
+    })()
+    
+    fake_update = type('obj', (object,), {
+        'callback_query': fake_query,
+        'effective_user': update.effective_user
+    })()
+    
+    await admin_menu_callback(fake_update, context)
+
+
+async def accounts_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Меню управления аккаунтами"""
+    # Определяем откуда пришел запрос
+    if hasattr(update, 'callback_query') and update.callback_query:
+        query = update.callback_query
+        await query.answer()
+        send_message = query.edit_message_text
+    else:
+        send_message = update.message.reply_text
+    
+    user_id = update.effective_user.id
+    accounts = db.get_user_accounts(user_id)
+    
+    if not accounts:
+        text = (
+            "📱 *Управление аккаунтами*\n\n"
+            "У вас пока нет подключенных аккаунтов\n\n"
+            "Добавьте Telegram аккаунт для начала работы"
+        )
+        keyboard = [
+            [InlineKeyboardButton("➕ Добавить аккаунт", callback_data='connect_userbot')],
+            [InlineKeyboardButton("◀️ Назад", callback_data='back_to_menu')]
+        ]
+    else:
+        text = f"📱 *Управление аккаунтами*\n\nПодключено: {len(accounts)}\n\n"
+        
+        keyboard = []
+        for acc in accounts:
+            keyboard.append([
+                InlineKeyboardButton(
+                    f"📱 {acc['account_name']} ({acc['phone']})",
+                    callback_data=f"account_{acc['id']}"
+                )
+            ])
+        
+        keyboard.append([InlineKeyboardButton("➕ Добавить аккаунт", callback_data='connect_userbot')])
+        keyboard.append([InlineKeyboardButton("◀️ Назад", callback_data='back_to_menu')])
+    
+    await send_message(
+        text,
+        parse_mode='Markdown',
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
 # ==================== MAIN ====================
 
 def main():
@@ -2775,7 +2967,9 @@ def main():
     
     # Рассылка
     user_mailing_handler = ConversationHandler(
-        entry_points=[MessageHandler(filters.Regex('^📨 Создать рассылку$'), start)],
+        entry_points=[
+            MessageHandler(filters.Regex('^📨 Создать рассылку$'), create_mailing_handler)
+        ],
         states={
             MAILING_TARGETS: [MessageHandler(filters.TEXT & ~filters.COMMAND, mailing_targets_received)],
             MAILING_ACCOUNTS: [
@@ -2870,6 +3064,17 @@ def main():
     
     # ==================== MESSAGE HANDLERS ====================
     
+    # Обработчики кнопок меню (должны быть ПЕРЕД общим handler)
+    application.add_handler(MessageHandler(filters.Regex('^📱 Мои аккаунты$'), accounts_menu_handler))
+    application.add_handler(MessageHandler(filters.Regex('^📨 Создать рассылку$'), create_mailing_handler))
+    application.add_handler(MessageHandler(filters.Regex('^⏰ Планировщик$'), schedule_menu_handler))
+    application.add_handler(MessageHandler(filters.Regex('^📜 История$'), history_handler))
+    application.add_handler(MessageHandler(filters.Regex('^📊 Мой статус$'), status_handler))
+    application.add_handler(MessageHandler(filters.Regex('^💎 Тарифы$'), tariffs_handler))
+    application.add_handler(MessageHandler(filters.Regex('^ℹ️ Помощь$'), help_handler))
+    application.add_handler(MessageHandler(filters.Regex('^⚙️ Админ$'), admin_handler))
+    
+    # Общий обработчик (должен быть ПОСЛЕДНИМ)
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, start))
     
     # ==================== ЗАПУСК ====================
