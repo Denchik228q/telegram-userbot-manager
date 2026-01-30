@@ -2697,7 +2697,7 @@ def main():
     
     # Оплата
     payment_handler = ConversationHandler(
-        entry_points=[CallbackQueryHandler(buy_subscription, pattern='^buy_')],
+        entry_points=[CallbackQueryHandler(subscribe_plan, pattern='^subscribe_')],
         states={
             PAYMENT_RECEIPT: [MessageHandler(filters.PHOTO, payment_receipt)]
         },
