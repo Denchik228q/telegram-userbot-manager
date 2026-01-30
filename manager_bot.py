@@ -787,10 +787,10 @@ async def reject_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode='Markdown'
     )
 
-# ==================== ПОДКЛЮЧЕНИЕ АККАУНТА ====================
+# ==================== ПОДКЛЮЧЕНИЕ АККАУНТОВ ====================
 
 async def connect_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Начало подключения аккаунта"""
+    """Начало подключения юзербота"""
     query = update.callback_query
     await query.answer()
     
@@ -799,141 +799,204 @@ async def connect_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Проверяем лимиты
     limits = check_user_limits(user_id, 'account')
     if not limits['allowed']:
-        keyboard = [[InlineKeyboardButton("💎 Обновить тариф", callback_data="view_tariffs")]]
         await query.edit_message_text(
             f"⚠️ {limits['reason']}",
-            reply_markup=InlineKeyboardMarkup(keyboard)
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("💎 Тарифы", callback_data="view_tariffs")
+            ]])
         )
         return ConversationHandler.END
     
     await query.edit_message_text(
-        "📱 *Добавление аккаунта*\n\n"
-        "Введите номер телефона в международном формате:\n"
-        "Пример: `+79991234567`\n\n"
+        "📱 *Подключение аккаунта*\n\n"
+        "Шаг 1: Отправьте номер телефона\n"
+        "Формат: +79991234567\n\n"
         "Или /cancel для отмены",
         parse_mode='Markdown'
     )
     
     return PHONE
 
-async def receive_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка номера телефона"""
+
+async def phone_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Получен номер телефона"""
     phone = update.message.text.strip()
-    
-    if not phone.startswith('+'):
-        phone = '+' + phone
-    
     user_id = update.effective_user.id
     
-    # Проверяем, есть ли уже такой аккаунт
-    existing = db.get_account_by_phone(user_id, phone)
-    if existing:
+    # Валидация номера
+    if not phone.startswith('+'):
         await update.message.reply_text(
-            "⚠️ Этот номер уже добавлен!\n\n"
-            "Используйте /start для возврата в меню."
+            "❌ Неверный формат!\n\n"
+            "Номер должен начинаться с +\n"
+            "Пример: +79991234567\n\n"
+            "Попробуйте снова или /cancel"
         )
-        return ConversationHandler.END
+        return PHONE
     
+    # Сохраняем номер
     context.user_data['phone'] = phone
     
     # Отправляем код
+    await update.message.reply_text("⏳ Отправка кода...")
+    
     result = await userbot_manager.send_code(phone)
     
-    if result['success']:
-        context.user_data['phone_code_hash'] = result['phone_code_hash']
+    if not result['success']:
         await update.message.reply_text(
-            "✅ Код отправлен в Telegram!\n\n"
-            "📲 Введите код подтверждения:"
-        )
-        return CODE
-    else:
-        await update.message.reply_text(
-            f"❌ Ошибка: {result['error']}\n\n"
-            "Используйте /start для повтора."
+            f"❌ Ошибка отправки кода!\n\n"
+            f"Причина: {result.get('error', 'Неизвестная ошибка')}\n\n"
+            f"Попробуйте другой номер или /cancel",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🔄 Повторить", callback_data='connect_userbot'),
+                InlineKeyboardButton("❌ Отмена", callback_data='back_to_menu')
+            ]])
         )
         return ConversationHandler.END
-
-async def receive_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка кода подтверждения"""
-    code = update.message.text.strip()
-    phone = context.user_data['phone']
-    phone_code_hash = context.user_data['phone_code_hash']
     
+    # Сохраняем phone_code_hash
+    context.user_data['phone_code_hash'] = result['phone_code_hash']
+    
+    await update.message.reply_text(
+        "✅ Код отправлен!\n\n"
+        "📲 Введите код из Telegram\n"
+        "Формат: 12345\n\n"
+        "Или /cancel для отмены"
+    )
+    
+    return CODE
+
+
+async def code_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Получен код подтверждения"""
+    code = update.message.text.strip()
+    user_id = update.effective_user.id
+    
+    phone = context.user_data.get('phone')
+    phone_code_hash = context.user_data.get('phone_code_hash')
+    
+    if not phone or not phone_code_hash:
+        await update.message.reply_text(
+            "❌ Ошибка: данные сессии потеряны\n\n"
+            "Начните подключение заново",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🔄 Заново", callback_data='connect_userbot')
+            ]])
+        )
+        return ConversationHandler.END
+    
+    await update.message.reply_text("⏳ Проверка кода...")
+    
+    # Авторизуемся
     result = await userbot_manager.sign_in(phone, code, phone_code_hash)
     
-    if result['success']:
-        session_id = result['session_id']
-        user_id = update.effective_user.id
+    if not result['success']:
+        error = result.get('error', 'Неизвестная ошибка')
         
-        # Добавляем аккаунт в БД
-        account_id = db.add_account(user_id, phone, session_id)
-        
-        if account_id:
+        # Если требуется пароль 2FA
+        if 'password' in error.lower() or '2fa' in error.lower():
+            context.user_data['needs_password'] = True
             await update.message.reply_text(
-                "✅ *Аккаунт успешно добавлен!*\n\n"
-                "Теперь вы можете:\n"
-                "• Добавить ещё аккаунты\n"
-                "• Начать рассылку\n"
-                "• Настроить расписание",
-                parse_mode='Markdown',
-                reply_markup=get_main_menu_keyboard(user_id)
+                "🔐 Требуется пароль 2FA\n\n"
+                "Введите пароль облачного хранилища:\n\n"
+                "Или /cancel для отмены"
             )
-        else:
-            await update.message.reply_text("❌ Ошибка сохранения аккаунта")
+            return PASSWORD
         
-        context.user_data.clear()
+        await update.message.reply_text(
+            f"❌ Ошибка авторизации!\n\n"
+            f"Причина: {error}\n\n"
+            f"Попробуйте ещё раз",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🔄 Повторить", callback_data='connect_userbot'),
+                InlineKeyboardButton("❌ Отмена", callback_data='back_to_menu')
+            ]])
+        )
         return ConversationHandler.END
     
-    elif result.get('password_required'):
-        await update.message.reply_text(
-            "🔐 Требуется пароль 2FA\n\n"
-            "Введите пароль:"
-        )
-        return PASSWORD
+    # Сохраняем аккаунт в БД
+    session_id = result['session_id']
+    account_name = result.get('account_name', phone)
     
+    account_id = db.add_account(user_id, phone, session_id, account_name)
+    
+    if account_id:
+        await update.message.reply_text(
+            f"✅ *Аккаунт подключен!*\n\n"
+            f"📱 Номер: {phone}\n"
+            f"👤 Имя: {account_name}\n"
+            f"🆔 ID: #{account_id}\n\n"
+            f"Теперь вы можете использовать его для рассылок",
+            parse_mode='Markdown',
+            reply_markup=get_main_menu_keyboard(user_id)
+        )
     else:
         await update.message.reply_text(
-            f"❌ Ошибка: {result['error']}\n\n"
-            "Используйте /start для повтора."
+            "⚠️ Аккаунт авторизован, но возникла ошибка сохранения\n\n"
+            "Обратитесь в поддержку",
+            reply_markup=get_main_menu_keyboard(user_id)
         )
-        return ConversationHandler.END
+    
+    # Очищаем данные
+    context.user_data.clear()
+    
+    return ConversationHandler.END
 
-async def receive_password(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка пароля 2FA"""
+
+async def password_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Получен пароль 2FA"""
     password = update.message.text.strip()
-    phone = context.user_data['phone']
+    user_id = update.effective_user.id
     
-    result = await userbot_manager.sign_in_2fa(phone, password)
+    phone = context.user_data.get('phone')
     
-    if result['success']:
-        session_id = result['session_id']
-        user_id = update.effective_user.id
-        
-        # Добавляем аккаунт в БД
-        account_id = db.add_account(user_id, phone, session_id)
-        
-        if account_id:
-            await update.message.reply_text(
-                "✅ *Аккаунт успешно добавлен!*\n\n"
-                "Теперь вы можете:\n"
-                "• Добавить ещё аккаунты\n"
-                "• Начать рассылку\n"
-                "• Настроить расписание",
-                parse_mode='Markdown',
-                reply_markup=get_main_menu_keyboard(user_id)
-            )
-        else:
-            await update.message.reply_text("❌ Ошибка сохранения аккаунта")
-        
-        context.user_data.clear()
-        return ConversationHandler.END
-    
-    else:
+    if not phone:
         await update.message.reply_text(
-            f"❌ Ошибка: {result['error']}\n\n"
-            "Используйте /start для повтора."
+            "❌ Ошибка: данные сессии потеряны",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🔄 Заново", callback_data='connect_userbot')
+            ]])
         )
         return ConversationHandler.END
+    
+    await update.message.reply_text("⏳ Проверка пароля...")
+    
+    # Авторизация с паролем
+    result = await userbot_manager.check_password(phone, password)
+    
+    if not result['success']:
+        await update.message.reply_text(
+            f"❌ Неверный пароль!\n\n"
+            f"Попробуйте ещё раз или /cancel",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🔄 Повторить", callback_data='connect_userbot')
+            ]])
+        )
+        return ConversationHandler.END
+    
+    # Сохраняем аккаунт
+    session_id = result['session_id']
+    account_name = result.get('account_name', phone)
+    
+    account_id = db.add_account(user_id, phone, session_id, account_name)
+    
+    if account_id:
+        await update.message.reply_text(
+            f"✅ *Аккаунт подключен!*\n\n"
+            f"📱 Номер: {phone}\n"
+            f"👤 Имя: {account_name}\n"
+            f"🆔 ID: #{account_id}\n\n"
+            f"Теперь вы можете использовать его для рассылок",
+            parse_mode='Markdown',
+            reply_markup=get_main_menu_keyboard(user_id)
+        )
+    else:
+        await update.message.reply_text(
+            "⚠️ Ошибка сохранения аккаунта",
+            reply_markup=get_main_menu_keyboard(user_id)
+        )
+    
+    context.user_data.clear()
+    return ConversationHandler.END
 
 # ==================== УПРАВЛЕНИЕ АККАУНТАМИ ====================
 
@@ -2646,6 +2709,7 @@ def main():
         states={
             PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, phone_received)],
             CODE: [MessageHandler(filters.TEXT & ~filters.COMMAND, code_received)],
+            PASSWORD: [MessageHandler(filters.TEXT & ~filters.COMMAND, password_received)]
         },
         fallbacks=[CommandHandler('cancel', cancel)]
     )
