@@ -2758,5 +2758,5 @@ def main():
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
-if name == '__main__':
+if __name__ == '__main__':
     main()
