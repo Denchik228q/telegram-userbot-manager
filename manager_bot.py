@@ -121,15 +121,23 @@ def get_admin_keyboard():
 
 async def check_subscription(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> bool:
     """Проверка подписки на канал"""
+    if not CHANNEL_ID or CHANNEL_ID == '@test':
+        # Если канал не настроен - пропускаем проверку
+        return True
+    
     try:
-        channel_username = PUBLIC_CHANNEL_URL.replace('@', '').replace('https://t.me/', '')
-        member = await context.bot.get_chat_member(chat_id=f"@{channel_username}", user_id=user_id)
-        if member.status in ['left', 'kicked']:
-            return False
+        # Получаем информацию о пользователе в канале
+        member = await context.bot.get_chat_member(chat_id=CHANNEL_ID, user_id=user_id)
+        
+        # Проверяем статус
+        if member.status in ['member', 'administrator', 'creator']:
+            return True
+        
+        return False
     except Exception as e:
         logger.error(f"Error checking subscription: {e}")
+        # В случае ошибки пропускаем проверку
         return True
-    return True
 
 def check_user_limits(user_id: int, action: str = 'account') -> dict:
     """
@@ -250,135 +258,42 @@ def get_user_status_text(user_id: int) -> str:
 # ==================== КОМАНДЫ ====================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик команды /start и главного меню"""
-    user_id = update.effective_user.id
-    username = update.effective_user.username
+    """Обработчик команды /start"""
+    user = update.effective_user
+    user_id = user.id
+    username = user.username
     
-    # Добавляем пользователя (с триальным периодом)
-    db.add_user(user_id, username)
-    
-    # Проверяем подписку на канал
-    is_subscribed = await check_subscription(user_id, context)
-    
-    if not is_subscribed:
-        if update.message:
-            await update.message.reply_text(
-                f"👋 Добро пожаловать!\n\n"
-                f"Для использования бота подпишитесь на наш канал:",
-                reply_markup=get_subscription_keyboard()
-            )
-        else:
-            query = update.callback_query
-            await query.edit_message_text(
-                f"👋 Добро пожаловать!\n\n"
-                f"Для использования бота подпишитесь на наш канал:",
-                reply_markup=get_subscription_keyboard()
-            )
+    # Проверяем подписку
+    if not await check_subscription(user_id, context):
+        keyboard = []
+        if CHANNEL_ID and CHANNEL_ID != '@test':
+            keyboard.append([InlineKeyboardButton(
+                "📢 Подписаться на канал",
+                url=f"https://t.me/{CHANNEL_ID.replace('@', '')}"
+            )])
+        keyboard.append([InlineKeyboardButton(
+            "✅ Я подписался",
+            callback_data='check_subscription'
+        )])
+        
+        await update.message.reply_text(
+            "⚠️ *Для использования бота требуется подписка на канал*\n\n"
+            f"Подпишитесь на {CHANNEL_ID} и нажмите кнопку ниже",
+            parse_mode='Markdown',
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
         return
     
-    # ✅ ПРОВЕРЯЕМ ТЕКСТ СООБЩЕНИЯ (КНОПКИ МЕНЮ)
-    message = update.message
-    if message and message.text:
-        text = message.text
-        
-        # Обработка кнопок меню
-        if text == '📨 Создать рассылку':
-            # Проверяем лимиты
-            limits = check_user_limits(user_id, 'mailing')
-            if not limits['allowed']:
-                await message.reply_text(
-                    f"⚠️ {limits['reason']}",
-                    reply_markup=InlineKeyboardMarkup([[
-                        InlineKeyboardButton("💎 Тарифы", callback_data="view_tariffs")
-                    ]])
-                )
-                return
-            
-            await message.reply_text(
-                "📝 Отправьте список ссылок на группы/каналы\n"
-                "(по одной на строку)\n\n"
-                "Или /cancel для отмены"
-            )
-            return MAILING_TARGETS
-        
-        elif text == '📱 Мои аккаунты':
-            await accounts_menu(update, context)
-            return
-        
-        elif text == '⏰ Планировщик':
-            keyboard = [
-                [InlineKeyboardButton("➕ Создать расписание", callback_data='create_schedule')],
-                [InlineKeyboardButton("📋 Мои расписания", callback_data='my_schedules')],
-                [InlineKeyboardButton("◀️ Назад", callback_data='back_to_menu')]
-            ]
-            
-            await message.reply_text(
-                "⏰ *Планировщик рассылок*\n\n"
-                "Автоматическая отправка сообщений по расписанию:\n\n"
-                "• 🔂 *Один раз* - запуск в конкретное время\n"
-                "• 📅 *Ежедневно* - каждый день в одно время\n"
-                "• ⏰ *Ежечасно* - каждый час\n\n"
-                "Выберите действие:",
-                reply_markup=InlineKeyboardMarkup(keyboard),
-                parse_mode='Markdown'
-            )
-            return
-        
-        elif text == '📜 История':
-            await mailing_history(update, context)
-            return
-        
-        elif text == '📊 Мой статус':
-            await my_status_callback(update, context)
-            return
-        
-        elif text == '💎 Тарифы':
-            await view_tariffs_callback(update, context)
-            return
-        
-        elif text == 'ℹ️ Помощь':
-            await help_callback(update, context)
-            return
+    # Добавляем пользователя в БД
+    db.add_user(user_id, username)
     
-    # ✅ ЕСЛИ НЕ КНОПКА, ПОКАЗЫВАЕМ ГЛАВНОЕ МЕНЮ
-    # Получаем статус пользователя
-    user_data = db.get_user(user_id)
-    accounts = db.get_user_accounts(user_id)
-    
-    subscription_active = user_data['subscription_end'] > datetime.now()
-    days_left = (user_data['subscription_end'] - datetime.now()).days
-    
-    accounts_text = f"📱 Аккаунтов: {len(accounts)}" if accounts else "⚠️ Аккаунты не добавлены"
-    
-    status_text = ""
-    if subscription_active:
-        if days_left <= 3:
-            status_text = f"\n⚠️ Подписка истекает через {days_left} дн."
-    else:
-        status_text = "\n❌ Подписка истекла! Обновите тариф."
-    
-    welcome_text = (
-        f"👋 Добро пожаловать в бот массовых рассылок!\n\n"
-        f"{accounts_text}{status_text}\n\n"
-        f"🎯 Возможности:\n"
-        f"• Рассылка в группы/каналы\n"
-        f"• Несколько аккаунтов\n"
-        f"• Планировщик рассылок\n"
-        f"• Автоматическое вступление\n\n"
-        f"Выберите действие:"
+    # Показываем главное меню
+    await update.message.reply_text(
+        f"👋 Привет, {user.first_name}!\n\n"
+        f"🤖 Я бот для автоматизации рассылок в Telegram\n\n"
+        f"Выберите действие:",
+        reply_markup=get_main_menu_keyboard(user_id)
     )
-    
-    if update.message:
-        await update.message.reply_text(
-            welcome_text,
-            reply_markup=get_main_menu_keyboard(user_id)
-        )
-    else:
-        query = update.callback_query
-        await query.edit_message_text(
-            welcome_text,
-            reply_markup=get_main_menu_keyboard(user_id)
-        )
 
 async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Админ-панель"""
@@ -1931,7 +1846,7 @@ async def mailing_targets_received(update: Update, context: ContextTypes.DEFAULT
             "❌ Не найдено ни одной ссылки!\n\n"
             "Отправьте ссылки заново или используйте /cancel"
         )
-        return USER_MAILING_TARGETS
+        return MAILING_TARGETS
     
     context.user_data['mailing_targets'] = targets
     
@@ -1947,7 +1862,7 @@ async def mailing_targets_received(update: Update, context: ContextTypes.DEFAULT
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
     
-    return USER_MAILING_MESSAGE
+    return MAILING_MESSAGE
 
 async def mailing_message_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработка сообщения для рассылки"""
