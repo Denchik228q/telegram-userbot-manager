@@ -177,7 +177,7 @@ class Database:
             return False
     
     def get_all_users(self) -> List[Dict]:
-    """Получить всех пользователей"""
+        """Получить всех пользователей"""
     try:
         cursor = self.conn.cursor()
         cursor.execute('SELECT * FROM users ORDER BY created_at DESC')
