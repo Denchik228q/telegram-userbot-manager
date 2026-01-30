@@ -123,7 +123,9 @@ def check_user_limits(user_id: int, action: str) -> dict:
     plan = SUBSCRIPTIONS.get(plan_id)
     
     if not plan:
-        return {'allowed': False, 'reason': 'Неизвестный тариф'}
+        # Если тариф не найден - даем trial
+        plan = SUBSCRIPTIONS.get('trial')
+        logger.warning(f"Unknown plan '{plan_id}' for user {user_id}, using trial")
     
     # Проверка срока подписки
     subscription_end = user.get('subscription_end')
@@ -139,9 +141,9 @@ def check_user_limits(user_id: int, action: str) -> dict:
     # Проверка лимита аккаунтов
     if action == 'account':
         current_accounts = len(db.get_user_accounts(user_id))
-        max_accounts = plan['max_accounts']
+        max_accounts = plan.get('max_accounts', 1)
         
-        if current_accounts >= max_accounts:
+        if max_accounts != -1 and current_accounts >= max_accounts:
             return {
                 'allowed': False,
                 'reason': f'⚠️ Достигнут лимит аккаунтов!\n\n'
@@ -153,7 +155,7 @@ def check_user_limits(user_id: int, action: str) -> dict:
     # Проверка лимита рассылок
     if action == 'mailing':
         mailings_today = db.get_user_mailings_today(user_id)
-        max_mailings = plan['max_mailings_per_day']
+        max_mailings = plan.get('max_mailings_per_day', 3)  # По умолчанию 3
         
         if max_mailings != -1 and mailings_today >= max_mailings:
             return {
@@ -428,53 +430,111 @@ async def check_subscription_callback(update: Update, context: ContextTypes.DEFA
         await query.answer("❌ Вы ещё не подписались!", show_alert=True)
 
 async def my_status_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Мой статус"""
-    query = update.callback_query
-    await query.answer()
-    
+    """Показ статуса пользователя"""
+    query = update.callback_query if update.callback_query else None
+    message = update.message
     user_id = update.effective_user.id
-    status_text = get_user_status_text(user_id)
     
-    keyboard = [
-        [InlineKeyboardButton("💎 Обновить тариф", callback_data="view_tariffs")],
-        [InlineKeyboardButton("◀️ Назад", callback_data="back_to_menu")]
-    ]
+    user_data = db.get_user(user_id)
+    accounts = db.get_user_accounts(user_id)
+    mailings_today = db.get_user_mailings_today(user_id)
     
-    await query.edit_message_text(
-        status_text,
-        parse_mode='Markdown',
-        reply_markup=InlineKeyboardMarkup(keyboard)
+    plan_id = user_data.get('subscription_plan', 'trial')
+    plan = SUBSCRIPTIONS.get(plan_id, SUBSCRIPTIONS['trial'])
+    
+    subscription_end = user_data.get('subscription_end')
+    if isinstance(subscription_end, str):
+        subscription_end = datetime.fromisoformat(subscription_end)
+    
+    days_left = (subscription_end - datetime.now()).days
+    is_active = subscription_end > datetime.now()
+    
+    status_emoji = "✅" if is_active else "❌"
+    status_text = "Активна" if is_active else "Истекла"
+    
+    max_accounts = plan.get('max_accounts', 1)
+    max_mailings = plan.get('max_mailings_per_day', 3)
+    
+    accounts_text = f"{len(accounts)}/{max_accounts}" if max_accounts != -1 else f"{len(accounts)}/♾"
+    mailings_text = f"{mailings_today}/{max_mailings}" if max_mailings != -1 else f"{mailings_today}/♾"
+    
+    status_message = (
+        f"👤 *Ваш статус*\n\n"
+        f"💎 Тариф: {plan['name']}\n"
+        f"{status_emoji} Статус: {status_text}\n"
+        f"📅 До окончания: {days_left} дн.\n\n"
+        f"📊 *Использование:*\n"
+        f"📱 Аккаунтов: {accounts_text}\n"
+        f"📨 Рассылок сегодня: {mailings_text}\n"
     )
+    
+    keyboard = [[InlineKeyboardButton("💎 Обновить тариф", callback_data='view_tariffs')]]
+    
+    if not is_active:
+        keyboard.insert(0, [InlineKeyboardButton("⚠️ Продлить подписку", callback_data='view_tariffs')])
+    
+    keyboard.append([InlineKeyboardButton("◀️ Назад", callback_data='back_to_menu')])
+    
+    if query:
+        await query.answer()
+        await query.edit_message_text(
+            status_message,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode='Markdown'
+        )
+    else:
+        await message.reply_text(
+            status_message,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode='Markdown'
+        )
 
 async def view_tariffs_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Показать тарифы"""
-    query = update.callback_query
-    await query.answer()
+    """Показ тарифов"""
+    query = update.callback_query if update.callback_query else None
+    message = update.message
     
     tariffs_text = "💎 *Доступные тарифы:*\n\n"
     keyboard = []
     
     for plan_id, plan in SUBSCRIPTIONS.items():
         if plan_id == 'trial':
-            continue
+            continue  # Пропускаем пробный
         
-        tariffs_text += f"*{plan['name']}* - {plan['price']}₽/{plan['duration']} дн.\n"
-        tariffs_text += f"{plan['description']}\n\n"
+        max_accounts = plan.get('max_accounts', 1)
+        max_mailings = plan.get('max_mailings_per_day', 3)
         
-        keyboard.append([
-            InlineKeyboardButton(
-                f"💳 Купить {plan['name']} - {plan['price']}₽",
-                callback_data=f"buy_{plan_id}"
-            )
-        ])
+        accounts_text = "♾ Безлимит" if max_accounts == -1 else f"{max_accounts} шт"
+        mailings_text = "♾ Безлимит" if max_mailings == -1 else f"{max_mailings}/день"
+        
+        tariffs_text += (
+            f"{plan['name']}\n"
+            f"💰 Цена: {plan['price']}₽/мес\n"
+            f"📱 Аккаунтов: {accounts_text}\n"
+            f"📨 Рассылок: {mailings_text}\n"
+            f"📝 {plan['description']}\n\n"
+        )
+        
+        keyboard.append([InlineKeyboardButton(
+            f"{plan['name']} - {plan['price']}₽",
+            callback_data=f'subscribe_{plan_id}'
+        )])
     
-    keyboard.append([InlineKeyboardButton("◀️ Назад", callback_data="back_to_menu")])
+    keyboard.append([InlineKeyboardButton("◀️ Назад", callback_data='back_to_menu')])
     
-    await query.edit_message_text(
-        tariffs_text,
-        parse_mode='Markdown',
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
+    if query:
+        await query.answer()
+        await query.edit_message_text(
+            tariffs_text,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode='Markdown'
+        )
+    else:
+        await message.reply_text(
+            tariffs_text,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode='Markdown'
+        )
 
 # ==================== ОПЛАТА ====================
 
