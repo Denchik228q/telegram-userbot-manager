@@ -536,180 +536,258 @@ async def view_tariffs_callback(update: Update, context: ContextTypes.DEFAULT_TY
             parse_mode='Markdown'
         )
 
-# ==================== ОПЛАТА ====================
+# ==================== ПЛАТЕЖИ ====================
 
-async def buy_subscription(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Начало покупки подписки"""
+async def subscribe_plan(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Выбор тарифа для покупки"""
     query = update.callback_query
     await query.answer()
     
-    plan_id = query.data.split('_')[1]
+    plan_id = query.data.split('_')[1]  # subscribe_amateur -> amateur
     plan = SUBSCRIPTIONS.get(plan_id)
     
     if not plan:
         await query.edit_message_text("❌ Тариф не найден")
-        return ConversationHandler.END
+        return
     
-    context.user_data['buying_plan'] = plan_id
+    user_id = update.effective_user.id
     
-    payment_text = f"""
-💳 *Оплата тарифа "{plan['name']}"*
-
-💰 Сумма: {plan['price']}₽
-📅 Срок: {plan['duration']} дней
-
-*Реквизиты для оплаты:*
-💳 Карта: `{PAYMENT_CARD}`
-📱 Телефон: `{PAYMENT_PHONE}`
-
-Переведите {plan['price']}₽ и отправьте скриншот оплаты.
-
-Или /cancel для отмены
-    """
+    # Создаем платеж
+    payment_id = db.add_payment(user_id, plan_id, plan['price'])
+    
+    if not payment_id:
+        await query.edit_message_text(
+            "❌ Ошибка создания платежа\nПопробуйте позже",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("◀️ Назад", callback_data='view_tariffs')
+            ]])
+        )
+        return
+    
+    max_accounts = plan.get('max_accounts', 1)
+    max_mailings = plan.get('max_mailings_per_day', 3)
+    
+    accounts_text = "♾ Безлимит" if max_accounts == -1 else f"{max_accounts} шт"
+    mailings_text = "♾ Безлимит" if max_mailings == -1 else f"{max_mailings}/день"
+    
+    payment_text = (
+        f"💎 *Оформление подписки*\n\n"
+        f"📦 Тариф: {plan['name']}\n"
+        f"💰 Стоимость: {plan['price']}₽\n"
+        f"📅 Период: {plan['days']} дней\n\n"
+        f"📊 *Включено:*\n"
+        f"📱 Аккаунтов: {accounts_text}\n"
+        f"📨 Рассылок: {mailings_text}\n\n"
+        f"🔢 ID платежа: #{payment_id}\n\n"
+        f"💳 *Реквизиты для оплаты:*\n\n"
+    )
+    
+    # Добавляем реквизиты из config
+    for method, details in PAYMENT_METHODS.items():
+        payment_text += f"*{details['name']}:*\n`{details['wallet']}`\n\n"
+    
+    payment_text += (
+        f"⚠️ *Важно:*\n"
+        f"После оплаты отправьте скриншот чека боту\n"
+        f"или нажмите кнопку «Я оплатил»\n\n"
+        f"Платеж будет проверен администратором"
+    )
+    
+    keyboard = [
+        [InlineKeyboardButton("✅ Я оплатил", callback_data=f'paid_{payment_id}')],
+        [InlineKeyboardButton("❌ Отменить", callback_data='view_tariffs')]
+    ]
     
     await query.edit_message_text(
         payment_text,
+        reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode='Markdown'
     )
-    
-    return PAYMENT_RECEIPT
 
-async def payment_receipt(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка скриншота оплаты"""
-    user_id = update.effective_user.id
-    username = update.effective_user.username or "Без username"
-    plan_id = context.user_data.get('buying_plan')
-    
-    if not plan_id:
-        await update.message.reply_text("❌ Ошибка: тариф не выбран")
-        return ConversationHandler.END
-    
-    plan = SUBSCRIPTIONS.get(plan_id)
-    
-    # Сохраняем платёж в БД
-    payment_id = db.add_payment(user_id, plan_id, plan['price'])
-    
-    # Отправляем админу
-    try:
-        await context.bot.send_photo(
-            chat_id=ADMIN_ID,
-            photo=update.message.photo[-1].file_id,
-            caption=f"💰 *Новая оплата #{payment_id}*\n\n"
-                    f"👤 От: {username} (ID: {user_id})\n"
-                    f"💎 Тариф: {plan['name']}\n"
-                    f"💵 Сумма: {plan['price']}₽",
-            reply_markup=InlineKeyboardMarkup([
-                [
-                    InlineKeyboardButton("✅ Подтвердить", callback_data=f"approve_payment_{payment_id}"),
-                    InlineKeyboardButton("❌ Отклонить", callback_data=f"reject_payment_{payment_id}")
-                ]
-            ]),
-            parse_mode='Markdown'
-        )
-        
-        await update.message.reply_text(
-            "✅ Скриншот отправлен администратору!\n\n"
-            "⏳ Ожидайте подтверждения оплаты (обычно до 10 минут).\n"
-            "Вы получите уведомление.",
-            reply_markup=get_main_menu_keyboard(user_id)
-        )
-    except Exception as e:
-        logger.error(f"Error sending payment to admin: {e}")
-        await update.message.reply_text(
-            "❌ Ошибка отправки. Попробуйте позже.",
-            reply_markup=get_main_menu_keyboard(user_id)
-        )
-    
-    context.user_data.clear()
-    return ConversationHandler.END
 
-async def approve_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Подтверждение оплаты админом"""
+async def payment_sent(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Подтверждение отправки платежа"""
     query = update.callback_query
     await query.answer()
     
-    if update.effective_user.id != ADMIN_ID:
-        await query.answer("❌ Нет доступа", show_alert=True)
-        return
+    payment_id = int(query.data.split('_')[1])  # paid_123 -> 123
+    user_id = update.effective_user.id
     
-    payment_id = int(query.data.split('_')[2])
+    # Получаем данные платежа
     payment = db.get_payment(payment_id)
     
     if not payment:
-        await query.edit_message_caption("❌ Платёж не найден")
+        await query.edit_message_text("❌ Платеж не найден")
         return
     
-    plan = SUBSCRIPTIONS.get(payment['plan_id'])
+    if payment['user_id'] != user_id:
+        await query.edit_message_text("❌ Это не ваш платеж")
+        return
     
-    # Обновляем подписку пользователя
-    db.update_user_subscription(
-        payment['user_id'],
-        payment['plan_id'],
-        days=plan['duration']
+    if payment['status'] != 'pending':
+        await query.edit_message_text(
+            f"ℹ️ Платеж уже обработан\n\n"
+            f"Статус: {payment['status']}",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🏠 Меню", callback_data='back_to_menu')
+            ]])
+        )
+        return
+    
+    # Уведомляем пользователя
+    await query.edit_message_text(
+        f"✅ *Платеж отправлен на проверку!*\n\n"
+        f"🔢 ID: #{payment_id}\n"
+        f"💰 Сумма: {payment['amount']}₽\n\n"
+        f"⏳ Ожидайте проверки администратором\n"
+        f"Обычно это занимает до 30 минут\n\n"
+        f"📬 Вам придет уведомление после проверки",
+        parse_mode='Markdown',
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("🏠 В меню", callback_data='back_to_menu')
+        ]])
     )
+    
+    # Уведомляем админа
+    plan = SUBSCRIPTIONS.get(payment['plan_id'])
+    user = db.get_user(user_id)
+    
+    admin_text = (
+        f"💰 *Новый платеж!*\n\n"
+        f"🔢 ID: #{payment_id}\n"
+        f"👤 Пользователь: {user_id}\n"
+        f"👤 Username: @{user.get('username', 'не указан')}\n"
+        f"💎 Тариф: {plan['name']}\n"
+        f"💰 Сумма: {payment['amount']}₽\n"
+        f"📅 Дата: {payment['created_at']}\n\n"
+        f"Проверьте оплату и подтвердите:"
+    )
+    
+    keyboard = [
+        [
+            InlineKeyboardButton("✅ Одобрить", callback_data=f'approve_payment_{payment_id}'),
+            InlineKeyboardButton("❌ Отклонить", callback_data=f'reject_payment_{payment_id}')
+        ]
+    ]
+    
+    try:
+        await context.bot.send_message(
+            chat_id=ADMIN_ID,
+            text=admin_text,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode='Markdown'
+        )
+    except Exception as e:
+        logger.error(f"Error sending admin notification: {e}")
+
+
+async def approve_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Одобрение платежа (админ)"""
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = update.effective_user.id
+    if user_id != ADMIN_ID:
+        await query.answer("❌ Доступ запрещен", show_alert=True)
+        return
+    
+    payment_id = int(query.data.split('_')[-1])
+    payment = db.get_payment(payment_id)
+    
+    if not payment:
+        await query.edit_message_text("❌ Платеж не найден")
+        return
+    
+    if payment['status'] != 'pending':
+        await query.answer(f"Платеж уже обработан: {payment['status']}", show_alert=True)
+        return
     
     # Обновляем статус платежа
     db.update_payment_status(payment_id, 'approved')
     
+    # Обновляем подписку пользователя
+    plan = SUBSCRIPTIONS.get(payment['plan_id'])
+    db.update_user_subscription(payment['user_id'], payment['plan_id'], plan['days'])
+    
     # Уведомляем пользователя
+    max_accounts = plan.get('max_accounts', 1)
+    max_mailings = plan.get('max_mailings_per_day', 3)
+    
+    accounts_text = "♾ Безлимит" if max_accounts == -1 else f"{max_accounts} шт"
+    mailings_text = "♾ Безлимит" if max_mailings == -1 else f"{mailings_today}/♾"
+    
     try:
         await context.bot.send_message(
             chat_id=payment['user_id'],
-            text=f"✅ *Оплата подтверждена!*\n\n"
-                 f"💎 Тариф: {plan['name']}\n"
-                 f"📅 Активен на {plan['duration']} дней\n\n"
-                 f"Спасибо за покупку! 🎉",
-                        parse_mode='Markdown',
-            reply_markup=get_main_menu_keyboard(payment['user_id'])
+            text=(
+                f"✅ *Платеж одобрен!*\n\n"
+                f"💎 Тариф: {plan['name']}\n"
+                f"📅 Активен: {plan['days']} дней\n\n"
+                f"📊 *Ваши лимиты:*\n"
+                f"📱 Аккаунтов: {accounts_text}\n"
+                f"📨 Рассылок: {mailings_text}\n\n"
+                f"Спасибо за покупку! 🎉"
+            ),
+            parse_mode='Markdown'
         )
     except Exception as e:
         logger.error(f"Error notifying user: {e}")
     
-    await query.edit_message_caption(
-        f"✅ *Оплата #{payment_id} подтверждена*\n\n"
-        f"👤 Пользователь: {payment['user_id']}\n"
-        f"💎 Тариф: {plan['name']}\n"
-        f"💵 Сумма: {plan['price']}₽",
+    # Обновляем сообщение админа
+    await query.edit_message_text(
+        f"{query.message.text}\n\n✅ *ОДОБРЕНО*",
         parse_mode='Markdown'
     )
 
+
 async def reject_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Отклонение оплаты админом"""
+    """Отклонение платежа (админ)"""
     query = update.callback_query
     await query.answer()
     
-    if update.effective_user.id != ADMIN_ID:
-        await query.answer("❌ Нет доступа", show_alert=True)
+    user_id = update.effective_user.id
+    if user_id != ADMIN_ID:
+        await query.answer("❌ Доступ запрещен", show_alert=True)
         return
     
-    payment_id = int(query.data.split('_')[2])
+    payment_id = int(query.data.split('_')[-1])
     payment = db.get_payment(payment_id)
     
     if not payment:
-        await query.edit_message_caption("❌ Платёж не найден")
+        await query.edit_message_text("❌ Платеж не найден")
         return
     
-    # Обновляем статус платежа
+    if payment['status'] != 'pending':
+        await query.answer(f"Платеж уже обработан: {payment['status']}", show_alert=True)
+        return
+    
+    # Обновляем статус
     db.update_payment_status(payment_id, 'rejected')
     
     # Уведомляем пользователя
     try:
         await context.bot.send_message(
             chat_id=payment['user_id'],
-            text=f"❌ *Оплата отклонена*\n\n"
-                 f"Причина: некорректный скриншот или сумма.\n\n"
-                 f"Свяжитесь с поддержкой для уточнения.",
+            text=(
+                f"❌ *Платеж отклонен*\n\n"
+                f"🔢 ID: #{payment_id}\n\n"
+                f"Возможные причины:\n"
+                f"• Неверная сумма\n"
+                f"• Платеж не найден\n"
+                f"• Неверные реквизиты\n\n"
+                f"Обратитесь в поддержку для уточнения"
+            ),
             parse_mode='Markdown',
             reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("💬 Поддержка", callback_data='support')
+                InlineKeyboardButton("💬 Поддержка", url=f"https://t.me/{SUPPORT_USERNAME}")
             ]])
         )
     except Exception as e:
         logger.error(f"Error notifying user: {e}")
     
-    await query.edit_message_caption(
-        f"❌ *Оплата #{payment_id} отклонена*\n\n"
-        f"👤 Пользователь: {payment['user_id']}",
+    # Обновляем сообщение админа
+    await query.edit_message_text(
+        f"{query.message.text}\n\n❌ *ОТКЛОНЕНО*",
         parse_mode='Markdown'
     )
 
@@ -2645,6 +2723,12 @@ def main():
     application.add_handler(CallbackQueryHandler(check_subscription_callback, pattern='^check_subscription$'))
     application.add_handler(CallbackQueryHandler(my_status_callback, pattern='^my_status$'))
     application.add_handler(CallbackQueryHandler(view_tariffs_callback, pattern='^view_tariffs$'))
+
+    # Платежи
+    application.add_handler(CallbackQueryHandler(subscribe_plan, pattern=r'^subscribe_'))
+    application.add_handler(CallbackQueryHandler(payment_sent, pattern=r'^paid_\d+$'))
+    application.add_handler(CallbackQueryHandler(approve_payment, pattern=r'^approve_payment_\d+$'))
+    application.add_handler(CallbackQueryHandler(reject_payment, pattern=r'^reject_payment_\d+$'))
     
     # Аккаунты
     application.add_handler(CallbackQueryHandler(accounts_menu, pattern='^accounts_menu$'))
