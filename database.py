@@ -488,7 +488,7 @@ class Database:
     # ==================== ПЛАТЕЖИ ====================
     
     def add_payment(self, user_id: int, plan_id: str, amount: int) -> int:
-    """Создать новый платеж"""
+        """Создать новый платеж"""
     try:
         cursor = self.conn.cursor()
         cursor.execute('''
