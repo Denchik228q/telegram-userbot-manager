@@ -36,8 +36,8 @@ class Database:
             conn.close()
     
     def _create_tables(self):
-    """Создание таблиц"""
-    cursor = self.conn.cursor()
+        """Создание таблиц"""
+        cursor = self.conn.cursor()
     
     # Таблица пользователей
     cursor.execute('''
