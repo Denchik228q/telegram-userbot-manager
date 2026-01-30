@@ -130,32 +130,35 @@ class Database:
     
     def get_user(self, user_id: int) -> Optional[Dict]:
         """Получить данные пользователя"""
-    try:
-        cursor = self.conn.cursor()
-        cursor.execute('SELECT * FROM users WHERE id = ?', (user_id,))
-        row = cursor.fetchone()
-        
-        if not row:
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute('SELECT * FROM users WHERE id = ?', (user_id,))
+            row = cursor.fetchone()
+            
+            if not row:
+                return None
+            
+            # Парсим дату из строки
+            subscription_end = row[3]
+            if isinstance(subscription_end, str):
+                try:
+                    subscription_end = datetime.fromisoformat(subscription_end)
+                except:
+                    try:
+                        subscription_end = datetime.strptime(subscription_end, '%Y-%m-%d %H:%M:%S.%f')
+                    except:
+                        subscription_end = datetime.strptime(subscription_end, '%Y-%m-%d %H:%M:%S')
+            
+            return {
+                'id': row[0],
+                'username': row[1],
+                'subscription_plan': row[2],
+                'subscription_end': subscription_end,
+                'created_at': row[4]
+            }
+        except Exception as e:
+            logger.error(f"Error getting user: {e}")
             return None
-        
-        # Парсим дату из строки
-        subscription_end = row[3]
-        if isinstance(subscription_end, str):
-            try:
-                subscription_end = datetime.fromisoformat(subscription_end)
-            except:
-                subscription_end = datetime.strptime(subscription_end, '%Y-%m-%d %H:%M:%S.%f')
-        
-        return {
-            'id': row[0],
-            'username': row[1],
-            'subscription_plan': row[2],
-            'subscription_end': subscription_end,  # Теперь datetime объект
-            'created_at': row[4]
-        }
-    except Exception as e:
-        logger.error(f"Error getting user: {e}")
-        return None
     
     def update_user_subscription(self, user_id: int, plan_id: str, days: int) -> bool:
         """Обновить подписку пользователя"""
@@ -178,33 +181,36 @@ class Database:
     
     def get_all_users(self) -> List[Dict]:
         """Получить всех пользователей"""
-    try:
-        cursor = self.conn.cursor()
-        cursor.execute('SELECT * FROM users ORDER BY created_at DESC')
-        rows = cursor.fetchall()
-        
-        users = []
-        for row in rows:
-            # Парсим дату
-            subscription_end = row[3]
-            if isinstance(subscription_end, str):
-                try:
-                    subscription_end = datetime.fromisoformat(subscription_end)
-                except:
-                    subscription_end = datetime.strptime(subscription_end, '%Y-%m-%d %H:%M:%S.%f')
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute('SELECT * FROM users ORDER BY created_at DESC')
+            rows = cursor.fetchall()
             
-            users.append({
-                'id': row[0],
-                'username': row[1],
-                'subscription_plan': row[2],
-                'subscription_end': subscription_end,
-                'created_at': row[4]
-            })
-        
-        return users
-    except Exception as e:
-        logger.error(f"Error getting all users: {e}")
-        return []
+            users = []
+            for row in rows:
+                # Парсим дату
+                subscription_end = row[3]
+                if isinstance(subscription_end, str):
+                    try:
+                        subscription_end = datetime.fromisoformat(subscription_end)
+                    except:
+                        try:
+                            subscription_end = datetime.strptime(subscription_end, '%Y-%m-%d %H:%M:%S.%f')
+                        except:
+                            subscription_end = datetime.strptime(subscription_end, '%Y-%m-%d %H:%M:%S')
+                
+                users.append({
+                    'id': row[0],
+                    'username': row[1],
+                    'subscription_plan': row[2],
+                    'subscription_end': subscription_end,
+                    'created_at': row[4]
+                })
+            
+            return users
+        except Exception as e:
+            logger.error(f"Error getting all users: {e}")
+            return []
     
     # ==================== АККАУНТЫ ====================
     
