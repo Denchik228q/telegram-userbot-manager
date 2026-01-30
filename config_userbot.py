@@ -2,30 +2,32 @@
 # -*- coding: utf-8 -*-
 
 """
-Конфигурация для Telegram Userbot Manager
+Configuration file for Userbot Manager
 """
 
 import os
-from datetime import timedelta
 
-# ============= TELEGRAM API =============
-API_ID = int(os.getenv('API_ID', '28890915'))
-API_HASH = os.getenv('API_HASH', '4984bb66f393bb411bd33674db81256e')
+# ==================== ОСНОВНЫЕ НАСТРОЙКИ ====================
 
-# ============= БОТЫ =============
-MANAGER_BOT_TOKEN = os.getenv('MANAGER_BOT_TOKEN', '8457587045:AAHellpvMkkHeJLVzYMCjKrE6smt9ekBja0')
+# Токен бота от @BotFather
+BOT_TOKEN = os.getenv('BOT_TOKEN', '8457587045:AAHellpvMkkHeJLVzYMCjKrE6smt9ekBja0')
 
-# ============= АДМИНИСТРАТОР =============
-ADMIN_ID = int(os.getenv('ADMIN_ID', '5688880070'))
+# ID администратора
+ADMIN_ID = int(os.getenv('ADMIN_ID', '7637526159'))
 
-# ============= КАНАЛЫ =============
-PUBLIC_CHANNEL_URL = os.getenv('PUBLIC_CHANNEL_URL', '@your_public_channel')
-PUBLIC_CHANNEL_NAME = "📢 Публичный канал"
+# ID канала для обязательной подписки
+CHANNEL_ID = os.getenv('CHANNEL_ID', '@test')
 
-PRIVATE_CHANNEL_URL = os.getenv('PRIVATE_CHANNEL_URL', '@your_private_channel')
-PRIVATE_CHANNEL_NAME = "🔒 Приватный канал"
+# Username поддержки
+SUPPORT_USERNAME = os.getenv('SUPPORT_USERNAME', 'support')
 
-# Тарифы подписок
+# ==================== TELEGRAM API ====================
+
+TELEGRAM_API_ID = os.getenv('TELEGRAM_API_ID')
+TELEGRAM_API_HASH = os.getenv('TELEGRAM_API_HASH')
+
+# ==================== ТАРИФЫ ====================
+
 SUBSCRIPTIONS = {
     'trial': {
         'name': '🆓 Пробный',
@@ -39,7 +41,7 @@ SUBSCRIPTIONS = {
         'name': '🌱 Любительский',
         'price': 499,
         'days': 30,
-        'max_accounts': 3,
+        'max_accounts': 2,
         'max_mailings_per_day': 10,
         'description': 'Для начинающих'
     },
@@ -55,53 +57,40 @@ SUBSCRIPTIONS = {
         'name': '💎 Премиум',
         'price': 4999,
         'days': 30,
-        'max_accounts': -1,  # -1 = безлимит
-        'max_mailings_per_day': -1,  # -1 = безлимит
+        'max_accounts': -1,
+        'max_mailings_per_day': -1,
         'description': 'Без ограничений'
     }
 }
 
-# Способы оплаты
+# ==================== СПОСОБЫ ОПЛАТЫ ====================
+
 PAYMENT_METHODS = {
     'sberbank': {
         'name': '💳 Альфа',
-        'wallet': '2200 1536 8370 4721'  # Замени на свой номер карты
+        'wallet': '2200 1536 8370 4721'
     },
     'tinkoff': {
         'name': '💳 Т-банк',
-        'wallet': '2200 7020 4134 1848'  # Замени на свой номер карты
+        'wallet': '2200 7020 4134 1848'
     },
     'yoomoney': {
         'name': '💰 ЮMoney',
-        'wallet': '4100118589897796'  # Замени на свой кошелек
+        'wallet': '4100118589897796'
     },
     'usdt': {
         'name': '₿ USDT TRC20',
-        'wallet': 'TD5EJBjQ3zM2SpgLCaBf4XptT7CoAFWPQr'  # Замени на свой адрес
+        'wallet': 'TD5EJBjQ3zM2SpgLCaBf4XptT7CoAFWPQr'
     }
 }
 
-# Username поддержки
-SUPPORT_USERNAME = 'your_support_bot'  # Замени на свой
+# ==================== НАСТРОЙКИ РАССЫЛОК ====================
 
-# ============= РЕКВИЗИТЫ ДЛЯ ОПЛАТЫ =============
-PAYMENT_CARD = os.getenv('PAYMENT_CARD', '2200 1536 8370 4721')
-PAYMENT_PHONE = os.getenv('PAYMENT_PHONE', '+7-982-757-23-16')
+# Задержки (в секундах)
+DELAY_BETWEEN_JOINS = 3  # Задержка между вступлениями
+DELAY_BETWEEN_MESSAGES = 5  # Задержка между сообщениями
+DELAY_BETWEEN_ACCOUNTS = 10  # Задержка между аккаунтами
 
-# ============= БАЗА ДАННЫХ =============
-DATABASE_PATH = os.getenv('DATABASE_PATH', 'bot.db')
-
-# ============= НАСТРОЙКИ РАССЫЛКИ =============
-MAILING_DELAY = float(os.getenv('MAILING_DELAY', '2.0'))
-
-# ============= ЛОГИРОВАНИЕ =============
-LOG_LEVEL = os.getenv('LOG_LEVEL', 'INFO')
-
-# ============= НАСТРОЙКИ СЕССИЙ =============
-SESSIONS_DIR = os.getenv('SESSIONS_DIR', './sessions')
-
-# ============= БЭКАПЫ =============
-BACKUP_DIR = os.getenv('BACKUP_DIR', './backups')
-
-# ============= ПРОЧЕЕ =============
-TRIAL_DAYS = int(os.getenv('TRIAL_DAYS', '3'))
+# Лимиты
+MAX_JOINS_PER_ACCOUNT = 50  # Максимум вступлений за раз
+MAX_MESSAGES_PER_ACCOUNT = 100  # Максимум сообщений за раз
