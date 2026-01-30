@@ -129,7 +129,7 @@ class Database:
             return False
     
     def get_user(self, user_id: int) -> Optional[Dict]:
-    """Получить данные пользователя"""
+        """Получить данные пользователя"""
     try:
         cursor = self.conn.cursor()
         cursor.execute('SELECT * FROM users WHERE id = ?', (user_id,))
