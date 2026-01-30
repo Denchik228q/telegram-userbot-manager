@@ -22,16 +22,12 @@ from telegram.ext import (
 )
 
 from config_userbot import (
-    MANAGER_BOT_TOKEN,
-    ADMIN_ID,
-    PUBLIC_CHANNEL_URL,
-    PRIVATE_CHANNEL_URL,
-    PUBLIC_CHANNEL_NAME,
-    PRIVATE_CHANNEL_NAME,
-    SUBSCRIPTIONS,
-    MAILING_DELAY,
-    PAYMENT_CARD,
-    PAYMENT_PHONE
+    BOT_TOKEN,
+    ADMIN_ID, 
+    SUBSCRIPTIONS, 
+    CHANNEL_ID,
+    PAYMENT_METHODS,
+    SUPPORT_USERNAME
 )
 from database import Database
 from userbot import UserbotManager
