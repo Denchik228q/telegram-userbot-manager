@@ -21,7 +21,12 @@ from telethon.sessions import StringSession
 from telethon.tl.functions.channels import JoinChannelRequest
 from telethon.tl.functions.messages import ImportChatInviteRequest
 from telethon.tl.types import Channel, Chat, User
-from config_userbot import API_ID, API_HASH, SESSIONS_DIR
+from config_userbot import TELEGRAM_API_ID as API_ID, TELEGRAM_API_HASH as API_HASH
+
+# Директория сессий
+SESSIONS_DIR = 'sessions'
+if not os.path.exists(SESSIONS_DIR):
+    os.makedirs(SESSIONS_DIR)
 
 logger = logging.getLogger(__name__)
 
