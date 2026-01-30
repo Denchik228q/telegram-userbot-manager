@@ -2,36 +2,44 @@
 # -*- coding: utf-8 -*-
 
 """
-Telegram Manager Bot - Complete Version with Subscriptions
+Telegram Bot Manager for Mass Mailing
 """
 
 import logging
 import asyncio
 import os
-import shutil
 from datetime import datetime, timedelta
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from typing import Dict, List
+
+from telegram import (
+    Update, 
+    InlineKeyboardButton, 
+    InlineKeyboardMarkup,
+    ReplyKeyboardMarkup,
+    ReplyKeyboardRemove
+)
 from telegram.ext import (
     Application,
     CommandHandler,
-    CallbackQueryHandler,
     MessageHandler,
+    CallbackQueryHandler,
     ConversationHandler,
     ContextTypes,
     filters
 )
 
+# Импорты из наших модулей
+from database import Database
+from userbot import UserbotManager
+from scheduler import MailingScheduler
 from config_userbot import (
     BOT_TOKEN,
-    ADMIN_ID, 
-    SUBSCRIPTIONS, 
+    ADMIN_ID,
+    SUBSCRIPTIONS,
     CHANNEL_ID,
     PAYMENT_METHODS,
     SUPPORT_USERNAME
 )
-from database import Database
-from userbot import UserbotManager
-from scheduler import MailingScheduler
 
 # Настройка логирования
 logging.basicConfig(
@@ -40,24 +48,38 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Инициализация
-db = Database()
-userbot_manager = UserbotManager()
+# ==================== КОНСТАНТЫ СОСТОЯНИЙ ====================
 
-# Состояния для ConversationHandler
+# Подключение аккаунта
 PHONE, CODE, PASSWORD = range(3)
-SUPPORT_MESSAGE = 10
-PAYMENT_RECEIPT = 20
-ADMIN_MAILING_MESSAGE, ADMIN_MAILING_CONFIRM = 100, 101
-USER_MAILING_TARGETS, USER_MAILING_MESSAGE, USER_MAILING_CONFIRM = 200, 201, 202
 
-# Состояния для планировщика
+# Рассылка
+MAILING_TARGETS = 10
+MAILING_ACCOUNTS = 11
+MAILING_MESSAGE = 12
+MAILING_CONFIRM = 13
+
+# Планировщик
 SCHEDULE_TARGETS = 100
 SCHEDULE_ACCOUNTS = 101
 SCHEDULE_MESSAGE = 102
 SCHEDULE_TYPE = 103
 SCHEDULE_TIME = 104
 SCHEDULE_CONFIRM = 105
+
+# Админ рассылка
+ADMIN_MAILING_MESSAGE = 200
+ADMIN_MAILING_CONFIRM = 201
+
+# Поддержка
+SUPPORT_MESSAGE = 300
+
+# ==================== ИНИЦИАЛИЗАЦИЯ ====================
+
+# Инициализация
+db = Database()
+userbot_manager = UserbotManager()
+# mailing_scheduler инициализируется в main() после создания application
 
 # ==================== КЛАВИАТУРЫ ====================
 
