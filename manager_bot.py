@@ -131,60 +131,83 @@ async def check_subscription(user_id: int, context: ContextTypes.DEFAULT_TYPE) -
         return True
     return True
 
-def check_user_limits(user_id: int, action: str) -> dict:
-    """Проверка лимитов пользователя"""
-    user = db.get_user(user_id)
-    if not user:
-        return {'allowed': False, 'reason': 'Пользователь не найден'}
+def check_user_limits(user_id: int, action: str = 'account') -> dict:
+    """
+    Проверка лимитов пользователя
+    action: 'account' или 'mailing'
+    """
+    user_data = db.get_user(user_id)
     
-    plan_id = user.get('subscription_plan', 'trial')
+    if not user_data:
+        return {
+            'allowed': False,
+            'reason': 'Пользователь не найден'
+        }
+    
+    # Парсим дату если это строка
+    subscription_end = user_data['subscription_end']
+    if isinstance(subscription_end, str):
+        try:
+            subscription_end = datetime.fromisoformat(subscription_end)
+        except:
+            subscription_end = datetime.strptime(subscription_end, '%Y-%m-%d %H:%M:%S.%f')
+    
+    # Проверяем активность подписки
+    subscription_active = subscription_end > datetime.now()
+    
+    if not subscription_active:
+        return {
+            'allowed': False,
+            'reason': '⚠️ Подписка истекла!\n\nПродлите подписку для продолжения работы',
+            'need_subscription': True
+        }
+    
+    plan_id = user_data['subscription_plan']
     plan = SUBSCRIPTIONS.get(plan_id)
     
     if not plan:
-        # Если тариф не найден - даем trial
-        plan = SUBSCRIPTIONS.get('trial')
-        logger.warning(f"Unknown plan '{plan_id}' for user {user_id}, using trial")
-    
-    # Проверка срока подписки
-    subscription_end = user.get('subscription_end')
-    if isinstance(subscription_end, str):
-        subscription_end = datetime.fromisoformat(subscription_end)
-    
-    if subscription_end < datetime.now():
         return {
-            'allowed': False, 
-            'reason': '⚠️ Подписка истекла!\n\nОбновите тариф для продолжения работы.'
+            'allowed': False,
+            'reason': 'Неизвестный тариф'
         }
     
-    # Проверка лимита аккаунтов
     if action == 'account':
-        current_accounts = len(db.get_user_accounts(user_id))
+        # Проверка лимита аккаунтов
         max_accounts = plan.get('max_accounts', 1)
+        if max_accounts == -1:  # Безлимит
+            return {'allowed': True}
         
-        if max_accounts != -1 and current_accounts >= max_accounts:
+        current_accounts = len(db.get_user_accounts(user_id))
+        
+        if current_accounts >= max_accounts:
             return {
                 'allowed': False,
                 'reason': f'⚠️ Достигнут лимит аккаунтов!\n\n'
-                         f'📱 Подключено: {current_accounts}/{max_accounts}\n'
-                         f'💎 Тариф: {plan["name"]}\n\n'
-                         f'Обновите тариф для подключения большего количества аккаунтов.'
+                         f'Текущий тариф: {plan["name"]}\n'
+                         f'Лимит: {max_accounts} аккаунтов\n'
+                         f'Используется: {current_accounts}\n\n'
+                         f'Обновите тариф для добавления новых аккаунтов'
             }
     
-    # Проверка лимита рассылок
-    if action == 'mailing':
-        mailings_today = db.get_user_mailings_today(user_id)
-        max_mailings = plan.get('max_mailings_per_day', 3)  # По умолчанию 3
+    elif action == 'mailing':
+        # Проверка лимита рассылок
+        max_mailings = plan.get('max_mailings_per_day', 3)
+        if max_mailings == -1:  # Безлимит
+            return {'allowed': True}
         
-        if max_mailings != -1 and mailings_today >= max_mailings:
+        mailings_today = db.get_user_mailings_today(user_id)
+        
+        if mailings_today >= max_mailings:
             return {
                 'allowed': False,
-                'reason': f'⚠️ Достигнут дневной лимит рассылок!\n\n'
-                         f'📨 Сегодня: {mailings_today}/{max_mailings}\n'
-                         f'💎 Тариф: {plan["name"]}\n\n'
-                         f'Обновите тариф или попробуйте завтра.'
+                'reason': f'⚠️ Достигнут лимит рассылок на сегодня!\n\n'
+                         f'Текущий тариф: {plan["name"]}\n'
+                         f'Лимит: {max_mailings} рассылок/день\n'
+                         f'Использовано сегодня: {mailings_today}\n\n'
+                         f'Обновите тариф или дождитесь завтра'
             }
     
-    return {'allowed': True, 'plan': plan}
+    return {'allowed': True}
 
 def get_user_status_text(user_id: int) -> str:
     """Получить текст статуса пользователя"""
@@ -448,64 +471,72 @@ async def check_subscription_callback(update: Update, context: ContextTypes.DEFA
         await query.answer("❌ Вы ещё не подписались!", show_alert=True)
 
 async def my_status_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Показ статуса пользователя"""
-    query = update.callback_query if update.callback_query else None
-    message = update.message
-    user_id = update.effective_user.id
+    """Показать статус пользователя"""
+    query = update.callback_query
+    await query.answer()
     
+    user_id = update.effective_user.id
     user_data = db.get_user(user_id)
+    
+    if not user_data:
+        await query.edit_message_text(
+            "❌ Данные не найдены",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🏠 Меню", callback_data='back_to_menu')
+            ]])
+        )
+        return
+    
+    # Парсим дату
+    subscription_end = user_data['subscription_end']
+    if isinstance(subscription_end, str):
+        try:
+            subscription_end = datetime.fromisoformat(subscription_end)
+        except:
+            subscription_end = datetime.strptime(subscription_end, '%Y-%m-%d %H:%M:%S.%f')
+    
+    plan_id = user_data['subscription_plan']
+    plan = SUBSCRIPTIONS.get(plan_id, {})
+    
+    # Проверяем активность
+    subscription_active = subscription_end > datetime.now()
+    days_left = (subscription_end - datetime.now()).days if subscription_active else 0
+    
+    # Получаем данные
     accounts = db.get_user_accounts(user_id)
     mailings_today = db.get_user_mailings_today(user_id)
     
-    plan_id = user_data.get('subscription_plan', 'trial')
-    plan = SUBSCRIPTIONS.get(plan_id, SUBSCRIPTIONS['trial'])
-    
-    subscription_end = user_data.get('subscription_end')
-    if isinstance(subscription_end, str):
-        subscription_end = datetime.fromisoformat(subscription_end)
-    
-    days_left = (subscription_end - datetime.now()).days
-    is_active = subscription_end > datetime.now()
-    
-    status_emoji = "✅" if is_active else "❌"
-    status_text = "Активна" if is_active else "Истекла"
-    
+    # Лимиты
     max_accounts = plan.get('max_accounts', 1)
     max_mailings = plan.get('max_mailings_per_day', 3)
     
     accounts_text = f"{len(accounts)}/{max_accounts}" if max_accounts != -1 else f"{len(accounts)}/♾"
     mailings_text = f"{mailings_today}/{max_mailings}" if max_mailings != -1 else f"{mailings_today}/♾"
     
-    status_message = (
-        f"👤 *Ваш статус*\n\n"
-        f"💎 Тариф: {plan['name']}\n"
-        f"{status_emoji} Статус: {status_text}\n"
-        f"📅 До окончания: {days_left} дн.\n\n"
+    status_emoji = "✅" if subscription_active else "❌"
+    status_text = f"Активна ({days_left} дн.)" if subscription_active else "Истекла"
+    
+    text = (
+        f"📊 *Ваш статус*\n\n"
+        f"💎 Тариф: {plan.get('name', 'Неизвестно')}\n"
+        f"{status_emoji} Подписка: {status_text}\n"
+        f"📅 До: {subscription_end.strftime('%d.%m.%Y')}\n\n"
         f"📊 *Использование:*\n"
         f"📱 Аккаунтов: {accounts_text}\n"
         f"📨 Рассылок сегодня: {mailings_text}\n"
     )
     
-    keyboard = [[InlineKeyboardButton("💎 Обновить тариф", callback_data='view_tariffs')]]
+    keyboard = [[InlineKeyboardButton("💎 Тарифы", callback_data="view_tariffs")]]
+    if not subscription_active or days_left < 3:
+        keyboard.insert(0, [InlineKeyboardButton("🔄 Продлить", callback_data="view_tariffs")])
     
-    if not is_active:
-        keyboard.insert(0, [InlineKeyboardButton("⚠️ Продлить подписку", callback_data='view_tariffs')])
+    keyboard.append([InlineKeyboardButton("◀️ Назад", callback_data="back_to_menu")])
     
-    keyboard.append([InlineKeyboardButton("◀️ Назад", callback_data='back_to_menu')])
-    
-    if query:
-        await query.answer()
-        await query.edit_message_text(
-            status_message,
-            reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode='Markdown'
-        )
-    else:
-        await message.reply_text(
-            status_message,
-            reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode='Markdown'
-        )
+    await query.edit_message_text(
+        text,
+        parse_mode='Markdown',
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
 
 async def view_tariffs_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Показ тарифов"""
