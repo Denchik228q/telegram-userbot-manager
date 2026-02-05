@@ -3,6 +3,7 @@
 
 """
 Database module for Telegram Bot Manager
+Все отступы - 4 пробела (без табов)
 """
 
 import sqlite3
@@ -100,37 +101,6 @@ class Database:
         
         self.conn.commit()
         logger.info("✅ Database tables created/updated successfully")
-		
-	def get_active_scheduled_mailings(self) -> List[Dict]:
-        """Получить активные запланированные рассылки"""
-        try:
-            cursor = self.conn.cursor()
-            cursor.execute('''
-                SELECT * FROM schedules 
-                WHERE is_active = 1
-                ORDER BY created_at DESC
-            ''')
-            rows = cursor.fetchall()
-            
-            schedules = []
-            for row in rows:
-                schedules.append({
-                    'id': row[0],
-                    'user_id': row[1],
-                    'targets': row[2],
-                    'message': row[3],
-                    'accounts': row[4],
-                    'schedule_type': row[5],
-                    'schedule_time': row[6],
-                    'is_active': row[7],
-                    'last_run': row[8],
-                    'created_at': row[9]
-                })
-            
-            return schedules
-        except Exception as e:
-            logger.error(f"Error getting active scheduled mailings: {e}")
-            return []
     
     # ==================== ПОЛЬЗОВАТЕЛИ ====================
     
@@ -416,7 +386,6 @@ class Database:
         except Exception as e:
             logger.error(f"Error creating payment: {e}")
             return None
-			
     
     def get_payment(self, payment_id: int) -> Optional[Dict]:
         """Получить данные платежа"""
@@ -497,13 +466,6 @@ class Database:
         except Exception as e:
             logger.error(f"Error creating schedule: {e}")
             return None
-			
-	    def get_active_scheduled_mailings(self) -> List[Dict]:
-        """
-        Получить активные запланированные рассылки
-        Алиас для get_all_active_schedules для совместимости со scheduler
-        """
-        return self.get_all_active_schedules()
     
     def get_user_schedules(self, user_id: int) -> List[Dict]:
         """Получить расписания пользователя"""
@@ -592,6 +554,13 @@ class Database:
         except Exception as e:
             logger.error(f"Error getting active schedules: {e}")
             return []
+    
+    def get_active_scheduled_mailings(self) -> List[Dict]:
+        """
+        Получить активные запланированные рассылки
+        Алиас для get_all_active_schedules для совместимости со scheduler
+        """
+        return self.get_all_active_schedules()
     
     def update_schedule_last_run(self, schedule_id: int) -> bool:
         """Обновить время последнего запуска"""
