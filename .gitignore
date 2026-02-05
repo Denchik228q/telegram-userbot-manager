@@ -46,3 +46,5 @@ Thumbs.db
 *.vsidx
 *.suo
 *.user
+__pycache__/
+*.pyc
