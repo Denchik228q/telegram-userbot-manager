@@ -2661,7 +2661,39 @@ async def admin_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 async def accounts_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик кнопки 'Мои аккаунты'"""
-    await accounts_menu(update, context)
+    user_id = update.effective_user.id
+    accounts = db.get_user_accounts(user_id)
+    
+    if not accounts:
+        text = (
+            "📱 *Управление аккаунтами*\n\n"
+            "У вас пока нет подключенных аккаунтов\n\n"
+            "Добавьте Telegram аккаунт для начала работы"
+        )
+        keyboard = [
+            [InlineKeyboardButton("➕ Добавить аккаунт", callback_data='connect_userbot')],
+            [InlineKeyboardButton("🏠 Меню", callback_data='back_to_menu')]
+        ]
+    else:
+        text = f"📱 *Управление аккаунтами*\n\nПодключено: {len(accounts)}\n\n"
+        
+        keyboard = []
+        for acc in accounts:
+            keyboard.append([
+                InlineKeyboardButton(
+                    f"📱 {acc['account_name']} ({acc['phone']})",
+                    callback_data=f"account_{acc['id']}"
+                )
+            ])
+        
+        keyboard.append([InlineKeyboardButton("➕ Добавить аккаунт", callback_data='connect_userbot')])
+        keyboard.append([InlineKeyboardButton("🏠 Меню", callback_data='back_to_menu')])
+    
+    await update.message.reply_text(
+        text,
+        parse_mode='Markdown',
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
 
 
 async def create_mailing_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2709,79 +2741,209 @@ async def create_mailing_handler(update: Update, context: ContextTypes.DEFAULT_T
 
 async def schedule_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик кнопки 'Планировщик'"""
-    query_data = type('obj', (object,), {'data': 'schedule_menu'})()
-    fake_query = type('obj', (object,), {
-        'answer': lambda: None,
-        'edit_message_text': update.message.reply_text,
-        'data': 'schedule_menu'
-    })()
+    user_id = update.effective_user.id
+    schedules = db.get_user_schedules(user_id)
     
-    fake_update = type('obj', (object,), {
-        'callback_query': fake_query,
-        'effective_user': update.effective_user
-    })()
+    if not schedules:
+        text = (
+            "⏰ *Планировщик рассылок*\n\n"
+            "У вас нет активных расписаний\n\n"
+            "Создайте автоматическую рассылку по расписанию"
+        )
+        keyboard = [
+            [InlineKeyboardButton("➕ Создать расписание", callback_data='create_schedule')],
+            [InlineKeyboardButton("🏠 Меню", callback_data='back_to_menu')]
+        ]
+    else:
+        text = f"⏰ *Планировщик рассылок*\n\nАктивных расписаний: {len(schedules)}\n\n"
+        
+        keyboard = []
+        for sched in schedules[:5]:  # Показываем первые 5
+            schedule_type = sched['schedule_type']
+            emoji = "🔂" if schedule_type == "once" else "📅" if schedule_type == "daily" else "⏰"
+            
+            keyboard.append([
+                InlineKeyboardButton(
+                    f"{emoji} {schedule_type.capitalize()} - {sched['schedule_time']}",
+                    callback_data=f"schedule_{sched['id']}"
+                )
+            ])
+        
+        keyboard.append([InlineKeyboardButton("➕ Создать расписание", callback_data='create_schedule')])
+        keyboard.append([InlineKeyboardButton("🏠 Меню", callback_data='back_to_menu')])
     
-    await schedule_mailing_menu(fake_update, context)
+    await update.message.reply_text(
+        text,
+        parse_mode='Markdown',
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
 
 
 async def history_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик кнопки 'История'"""
-    fake_query = type('obj', (object,), {
-        'answer': lambda: None,
-        'edit_message_text': update.message.reply_text
-    })()
+    user_id = update.effective_user.id
+    mailings = db.get_user_mailings(user_id, limit=10)
     
-    fake_update = type('obj', (object,), {
-        'callback_query': fake_query,
-        'effective_user': update.effective_user
-    })()
+    if not mailings:
+        await update.message.reply_text(
+            "📜 *История рассылок*\n\n"
+            "У вас пока нет рассылок\n\n"
+            "Создайте первую рассылку!",
+            parse_mode='Markdown',
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("📨 Создать рассылку", callback_data='start_mailing'),
+                InlineKeyboardButton("🏠 Меню", callback_data='back_to_menu')
+            ]])
+        )
+        return
     
-    await mailing_history(fake_update, context)
+    text = f"📜 *История рассылок*\n\nВсего рассылок: {len(mailings)}\n\n"
+    
+    for m in mailings[:10]:
+        status_emoji = "✅" if m['status'] == 'completed' else "⏳" if m['status'] == 'running' else "❌"
+        created = m['created_at']
+        
+        text += (
+            f"{status_emoji} *Рассылка #{m['id']}*\n"
+            f"📅 {created}\n"
+            f"✅ Успешно: {m['success_count']}\n"
+            f"❌ Ошибок: {m['error_count']}\n"
+            f"📱 Аккаунтов: {m['accounts_used']}\n\n"
+        )
+    
+    await update.message.reply_text(
+        text,
+        parse_mode='Markdown',
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("🏠 Меню", callback_data='back_to_menu')
+        ]])
+    )
 
 
 async def status_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик кнопки 'Мой статус'"""
-    fake_query = type('obj', (object,), {
-        'answer': lambda: None,
-        'edit_message_text': update.message.reply_text
-    })()
+    user_id = update.effective_user.id
+    user_data = db.get_user(user_id)
     
-    fake_update = type('obj', (object,), {
-        'callback_query': fake_query,
-        'effective_user': update.effective_user
-    })()
+    if not user_data:
+        await update.message.reply_text(
+            "❌ Данные не найдены",
+            reply_markup=get_main_menu_keyboard(user_id)
+        )
+        return
     
-    await my_status_callback(fake_update, context)
+    # Парсим дату
+    subscription_end = user_data['subscription_end']
+    if isinstance(subscription_end, str):
+        try:
+            subscription_end = datetime.fromisoformat(subscription_end)
+        except:
+            subscription_end = datetime.strptime(subscription_end, '%Y-%m-%d %H:%M:%S.%f')
+    
+    plan_id = user_data['subscription_plan']
+    plan = SUBSCRIPTIONS.get(plan_id, {})
+    
+    # Проверяем активность
+    subscription_active = subscription_end > datetime.now()
+    days_left = (subscription_end - datetime.now()).days if subscription_active else 0
+    
+    # Получаем данные
+    accounts = db.get_user_accounts(user_id)
+    mailings_today = db.get_user_mailings_today(user_id)
+    
+    # Лимиты
+    max_accounts = plan.get('max_accounts', 1)
+    max_mailings = plan.get('max_mailings_per_day', 3)
+    
+    accounts_text = f"{len(accounts)}/{max_accounts}" if max_accounts != -1 else f"{len(accounts)}/♾"
+    mailings_text = f"{mailings_today}/{max_mailings}" if max_mailings != -1 else f"{mailings_today}/♾"
+    
+    status_emoji = "✅" if subscription_active else "❌"
+    status_text = f"Активна ({days_left} дн.)" if subscription_active else "Истекла"
+    
+    text = (
+        f"📊 *Ваш статус*\n\n"
+        f"💎 Тариф: {plan.get('name', 'Неизвестно')}\n"
+        f"{status_emoji} Подписка: {status_text}\n"
+        f"📅 До: {subscription_end.strftime('%d.%m.%Y')}\n\n"
+        f"📊 *Использование:*\n"
+        f"📱 Аккаунтов: {accounts_text}\n"
+        f"📨 Рассылок сегодня: {mailings_text}\n"
+    )
+    
+    keyboard = [[InlineKeyboardButton("💎 Тарифы", callback_data="view_tariffs")]]
+    if not subscription_active or days_left < 3:
+        keyboard.insert(0, [InlineKeyboardButton("🔄 Продлить", callback_data="view_tariffs")])
+    
+    keyboard.append([InlineKeyboardButton("🏠 Меню", callback_data="back_to_menu")])
+    
+    await update.message.reply_text(
+        text,
+        parse_mode='Markdown',
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
 
 
 async def tariffs_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик кнопки 'Тарифы'"""
-    fake_query = type('obj', (object,), {
-        'answer': lambda: None,
-        'edit_message_text': update.message.reply_text
-    })()
+    text = "💎 *Доступные тарифы*\n\n"
     
-    fake_update = type('obj', (object,), {
-        'callback_query': fake_query,
-        'effective_user': update.effective_user
-    })()
+    keyboard = []
+    for plan_id, plan in SUBSCRIPTIONS.items():
+        price_text = "Бесплатно" if plan['price'] == 0 else f"{plan['price']}₽/мес"
+        
+        text += (
+            f"{plan['name']}\n"
+            f"💰 {price_text}\n"
+            f"📱 Аккаунтов: {plan['max_accounts'] if plan['max_accounts'] != -1 else '♾'}\n"
+            f"📨 Рассылок/день: {plan['max_mailings_per_day'] if plan['max_mailings_per_day'] != -1 else '♾'}\n"
+            f"⏱ {plan['days']} дней\n\n"
+        )
+        
+        if plan['price'] > 0:
+            keyboard.append([InlineKeyboardButton(
+                f"💎 Купить {plan['name']} - {plan['price']}₽",
+                callback_data=f"buy_{plan_id}"
+            )])
     
-    await view_tariffs_callback(fake_update, context)
+    keyboard.append([InlineKeyboardButton("🏠 Меню", callback_data="back_to_menu")])
+    
+    await update.message.reply_text(
+        text,
+        parse_mode='Markdown',
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
 
 
 async def help_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик кнопки 'Помощь'"""
-    fake_query = type('obj', (object,), {
-        'answer': lambda: None,
-        'edit_message_text': update.message.reply_text
-    })()
+    text = (
+        "ℹ️ *Помощь по использованию*\n\n"
+        "📱 *Аккаунты*\n"
+        "Подключите свои Telegram аккаунты для рассылок\n\n"
+        "📨 *Рассылки*\n"
+        "Создавайте рассылки в группы и каналы\n"
+        "Поддержка текста, фото и видео\n\n"
+        "⏰ *Планировщик*\n"
+        "Настраивайте автоматические рассылки:\n"
+        "• Один раз - в указанное время\n"
+        "• Ежедневно - каждый день\n"
+        "• Ежечасно - каждый час\n\n"
+        "💎 *Тарифы*\n"
+        "🆓 Пробный - 3 дня бесплатно\n"
+        "🌱 Любительский - 199₽/мес\n"
+        "💼 Профессиональный - 499₽/мес\n"
+        "💎 Премиум - 999₽/мес (безлимит)\n\n"
+        f"💬 Поддержка: @{SUPPORT_USERNAME}"
+    )
     
-    fake_update = type('obj', (object,), {
-        'callback_query': fake_query,
-        'effective_user': update.effective_user
-    })()
-
-    await help_callback(fake_update, context)
+    await update.message.reply_text(
+        text,
+        parse_mode='Markdown',
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("🏠 Меню", callback_data="back_to_menu")
+        ]])
+    )
 
 
 async def admin_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2792,58 +2954,25 @@ async def admin_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ У вас нет доступа")
         return
     
-    fake_query = type('obj', (object,), {
-        'answer': lambda: None,
-        'edit_message_text': update.message.reply_text
-    })()
+    stats = db.get_stats()
     
-    fake_update = type('obj', (object,), {
-        'callback_query': fake_query,
-        'effective_user': update.effective_user
-    })()
+    text = (
+        "⚙️ *Админ панель*\n\n"
+        f"👥 Всего пользователей: {stats['total_users']}\n"
+        f"✅ Активных подписок: {stats['active_subscriptions']}\n"
+        f"📱 Всего аккаунтов: {stats['total_accounts']}\n"
+        f"📨 Рассылок сегодня: {stats['mailings_today']}"
+    )
     
-    await admin_menu_callback(fake_update, context)
-
-
-async def accounts_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Меню управления аккаунтами"""
-    # Определяем откуда пришел запрос
-    if hasattr(update, 'callback_query') and update.callback_query:
-        query = update.callback_query
-        await query.answer()
-        send_message = query.edit_message_text
-    else:
-        send_message = update.message.reply_text
+    keyboard = [
+        [InlineKeyboardButton("👥 Пользователи", callback_data='admin_users')],
+        [InlineKeyboardButton("💰 Платежи", callback_data='admin_payments')],
+        [InlineKeyboardButton("📤 Рассылка всем", callback_data='admin_broadcast')],
+        [InlineKeyboardButton("💾 Бэкап БД", callback_data='admin_backup')],
+        [InlineKeyboardButton("🏠 Меню", callback_data='back_to_menu')]
+    ]
     
-    user_id = update.effective_user.id
-    accounts = db.get_user_accounts(user_id)
-    
-    if not accounts:
-        text = (
-            "📱 *Управление аккаунтами*\n\n"
-            "У вас пока нет подключенных аккаунтов\n\n"
-            "Добавьте Telegram аккаунт для начала работы"
-        )
-        keyboard = [
-            [InlineKeyboardButton("➕ Добавить аккаунт", callback_data='connect_userbot')],
-            [InlineKeyboardButton("◀️ Назад", callback_data='back_to_menu')]
-        ]
-    else:
-        text = f"📱 *Управление аккаунтами*\n\nПодключено: {len(accounts)}\n\n"
-        
-        keyboard = []
-        for acc in accounts:
-            keyboard.append([
-                InlineKeyboardButton(
-                    f"📱 {acc['account_name']} ({acc['phone']})",
-                    callback_data=f"account_{acc['id']}"
-                )
-            ])
-        
-        keyboard.append([InlineKeyboardButton("➕ Добавить аккаунт", callback_data='connect_userbot')])
-        keyboard.append([InlineKeyboardButton("◀️ Назад", callback_data='back_to_menu')])
-    
-    await send_message(
+    await update.message.reply_text(
         text,
         parse_mode='Markdown',
         reply_markup=InlineKeyboardMarkup(keyboard)
