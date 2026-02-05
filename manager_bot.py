@@ -352,23 +352,17 @@ async def back_to_menu_callback(update: Update, context: ContextTypes.DEFAULT_TY
     await query.answer()
     
     user_id = update.effective_user.id
-    user_data = db.get_user(user_id)
-    accounts = db.get_user_accounts(user_id)
     
-    subscription_active = user_data['subscription_end'] > datetime.now()
-    days_left = (user_data['subscription_end'] - datetime.now()).days
+    # Удаляем сообщение с inline кнопками
+    try:
+        await query.message.delete()
+    except:
+        pass
     
-    accounts_text = f"📱 Аккаунтов: {len(accounts)}" if accounts else "⚠️ Аккаунты не добавлены"
-    
-    status_text = ""
-    if subscription_active:
-        if days_left <= 3:
-            status_text = f"\n⚠️ Подписка истекает через {days_left} дн."
-    else:
-        status_text = "\n❌ Подписка истекла!"
-    
-    await query.edit_message_text(
-        f"Главное меню\n\n{accounts_text}{status_text}\n\nВыберите действие:",
+    # Отправляем новое с обычными кнопками
+    await context.bot.send_message(
+        chat_id=user_id,
+        text="🏠 Главное меню\n\nВыберите действие:",
         reply_markup=get_main_menu_keyboard(user_id)
     )
 
@@ -454,51 +448,81 @@ async def my_status_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     )
 
 async def view_tariffs_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Показ тарифов"""
-    query = update.callback_query if update.callback_query else None
-    message = update.message
+    """Показать тарифы"""
+    query = update.callback_query
+    await query.answer()
     
-    tariffs_text = "💎 *Доступные тарифы:*\n\n"
+    text = "💎 *Доступные тарифы*\n\n"
+    
     keyboard = []
-    
     for plan_id, plan in SUBSCRIPTIONS.items():
-        if plan_id == 'trial':
-            continue  # Пропускаем пробный
+        price_text = "Бесплатно" if plan['price'] == 0 else f"{plan['price']}₽/мес"
         
-        max_accounts = plan.get('max_accounts', 1)
-        max_mailings = plan.get('max_mailings_per_day', 3)
-        
-        accounts_text = "♾ Безлимит" if max_accounts == -1 else f"{max_accounts} шт"
-        mailings_text = "♾ Безлимит" if max_mailings == -1 else f"{max_mailings}/день"
-        
-        tariffs_text += (
+        text += (
             f"{plan['name']}\n"
-            f"💰 Цена: {plan['price']}₽/мес\n"
-            f"📱 Аккаунтов: {accounts_text}\n"
-            f"📨 Рассылок: {mailings_text}\n"
-            f"📝 {plan['description']}\n\n"
+            f"💰 {price_text}\n"
+            f"📱 Аккаунтов: {plan['max_accounts'] if plan['max_accounts'] != -1 else '♾'}\n"
+            f"📨 Рассылок/день: {plan['max_mailings_per_day'] if plan['max_mailings_per_day'] != -1 else '♾'}\n"
+            f"⏱ {plan['days']} дней\n\n"
         )
         
-        keyboard.append([InlineKeyboardButton(
-            f"{plan['name']} - {plan['price']}₽",
-            callback_data=f'subscribe_{plan_id}'
-        )])
+        if plan['price'] > 0:
+            keyboard.append([InlineKeyboardButton(
+                f"💎 Купить {plan['name']} - {plan['price']}₽",
+                callback_data=f"buy_{plan_id}"
+            )])
     
-    keyboard.append([InlineKeyboardButton("◀️ Назад", callback_data='back_to_menu')])
+    keyboard.append([InlineKeyboardButton("🏠 Меню", callback_data="back_to_menu")])
     
-    if query:
-        await query.answer()
+    await query.edit_message_text(
+        text,
+        parse_mode='Markdown',
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+
+async def select_plan_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Выбор тарифа для покупки"""
+    query = update.callback_query
+    await query.answer()
+    
+    plan_id = query.data.replace('buy_', '')
+    plan = SUBSCRIPTIONS.get(plan_id)
+    
+    if not plan:
         await query.edit_message_text(
-            tariffs_text,
-            reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode='Markdown'
+            "❌ Тариф не найден",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🏠 Меню", callback_data='back_to_menu')
+            ]])
         )
-    else:
-        await message.reply_text(
-            tariffs_text,
-            reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode='Markdown'
-        )
+        return
+    
+    # Сохраняем выбор
+    context.user_data['selected_plan'] = plan_id
+    
+    text = (
+        f"💎 *{plan['name']}*\n\n"
+        f"💰 Стоимость: {plan['price']}₽\n"
+        f"⏱ Срок: {plan['days']} дней\n"
+        f"📱 Аккаунтов: {plan['max_accounts'] if plan['max_accounts'] != -1 else '♾'}\n"
+        f"📨 Рассылок/день: {plan['max_mailings_per_day'] if plan['max_mailings_per_day'] != -1 else '♾'}\n\n"
+        f"Выберите способ оплаты:"
+    )
+    
+    keyboard = [
+        [InlineKeyboardButton("💳 Сбербанк", callback_data=f"payment_method_sber_{plan_id}")],
+        [InlineKeyboardButton("💳 Тинькофф", callback_data=f"payment_method_tinkoff_{plan_id}")],
+        [InlineKeyboardButton("💰 ЮMoney", callback_data=f"payment_method_yoomoney_{plan_id}")],
+        [InlineKeyboardButton("₿ USDT TRC20", callback_data=f"payment_method_usdt_{plan_id}")],
+        [InlineKeyboardButton("◀️ Назад", callback_data="view_tariffs")]
+    ]
+    
+    await query.edit_message_text(
+        text,
+        parse_mode='Markdown',
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
 
 # ==================== ПЛАТЕЖИ ====================
 
@@ -1917,73 +1941,59 @@ async def cancel_mailing(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 async def start_user_mailing(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Запуск рассылки через юзербот"""
+    """Запуск рассылки"""
     query = update.callback_query
-    await query.answer()
+    await query.answer("🚀 Запускаем рассылку...")
     
     user_id = update.effective_user.id
+    
+    # Получаем данные
     targets = context.user_data.get('mailing_targets', [])
-    mailing_message = context.user_data.get('mailing_message')
     selected_accounts = context.user_data.get('selected_accounts', [])
+    message_data = context.user_data.get('mailing_message', {})
     
-    if not targets or not mailing_message:
-        await query.edit_message_text("❌ Ошибка: данные не найдены")
-        return ConversationHandler.END
-    
-    # Проверяем лимиты
-    limits = check_user_limits(user_id, 'mailing')
-    if not limits['allowed']:
+    if not targets or not selected_accounts:
         await query.edit_message_text(
-            f"⚠️ {limits['reason']}\n\n"
-            f"💎 Обновите тариф для продолжения работы",
+            "❌ Недостаточно данных для рассылки",
             reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("💎 Тарифы", callback_data="view_tariffs")
+                InlineKeyboardButton("🏠 Меню", callback_data='back_to_menu')
             ]])
         )
         return ConversationHandler.END
     
-    # Получаем аккаунты
-    if not selected_accounts:
-        accounts = db.get_user_accounts(user_id)
-        selected_accounts = [acc['id'] for acc in accounts]
+    # Создаем запись в БД
+    mailing_id = db.add_mailing(
+        user_id=user_id,
+        targets='\n'.join(targets),
+        message=message_data.get('text', ''),
+        accounts_used=len(selected_accounts)
+    )
     
-    if not selected_accounts:
-        await query.edit_message_text(
-            "❌ Нет активных аккаунтов\n\n"
-            "Добавьте хотя бы один аккаунт для рассылки",
-            reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("➕ Добавить", callback_data="connect_userbot")
-            ]])
-        )
-        return ConversationHandler.END
-    
-    accounts_data = [db.get_account(acc_id) for acc_id in selected_accounts]
-    accounts_data = [acc for acc in accounts_data if acc]
-    
-    if not accounts_data:
-        await query.edit_message_text("❌ Не удалось загрузить аккаунты")
-        return ConversationHandler.END
-    
-    # Сохраняем начальное сообщение для обновления прогресса
-    progress_message = await query.edit_message_text(
-        f"📨 *Рассылка запущена!*\n\n"
-        f"👥 Аккаунтов: {len(accounts_data)}\n"
-        f"🎯 Чатов: {len(targets)}\n"
-        f"📊 На аккаунт: ~{len(targets) // len(accounts_data)}\n\n"
-        f"⏳ Подготовка...",
+    await query.edit_message_text(
+        "🚀 *Рассылка запущена!*\n\n"
+        f"🆔 ID: #{mailing_id}\n"
+        f"📊 Целей: {len(targets)}\n"
+        f"📱 Аккаунтов: {len(selected_accounts)}\n\n"
+        "⏳ Рассылка выполняется...\n"
+        "Вам придет уведомление по завершению",
         parse_mode='Markdown'
     )
     
-    # ✅ ЗАПУСКАЕМ РАССЫЛКУ В ФОНЕ (НЕ БЛОКИРУЕМ БОТА)
+    # Запускаем рассылку в фоне
     asyncio.create_task(
-        run_mailing_background(
-            user_id, accounts_data, targets, mailing_message, 
-            context, progress_message
+        execute_mailing(
+            user_id=user_id,
+            mailing_id=mailing_id,
+            targets=targets,
+            accounts=selected_accounts,
+            message_data=message_data,
+            context=context
         )
     )
     
-    # Очищаем данные и завершаем диалог
+    # Очищаем данные
     context.user_data.clear()
+    
     return ConversationHandler.END
 
 
@@ -2235,45 +2245,20 @@ async def help_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     
-    help_text = """
-ℹ️ *Справка*
-
-*Как начать:*
-1. Подпишитесь на канал
-2. Выберите тариф (есть пробный)
-3. Добавьте Telegram аккаунт
-4. Создайте рассылку
-5. Выберите аккаунты
-6. Отправьте сообщение
-
-*Форматы ссылок:*
-• https://t.me/channel
-• @username
-• https://t.me/+invitehash
-
-*Ограничения:*
-• Задержка 5 сек между сообщениями
-• Автоматическое вступление в группы
-• Лимиты зависят от тарифа
-
-*Команды:*
-/start - Главное меню
-/cancel - Отмена операции
-/admin - Админ-панель (только для админа)
-
-*Поддержка:*
-Используйте кнопку "💬 Поддержка" в меню
-    """
+    text = (
+        "ℹ️ *Помощь*\n\n"
+        "📱 Подключайте аккаунты\n"
+        "📨 Создавайте рассылки\n"
+        "⏰ Настраивайте расписание"
+    )
     
-    keyboard = [
-        [InlineKeyboardButton("💬 Поддержка", callback_data='support')],
-        [InlineKeyboardButton("◀️ Назад", callback_data='back_to_menu')]
-    ]
-    
+    # ✅ ОБЯЗАТЕЛЬНО передаем reply_markup
     await query.edit_message_text(
-        help_text,
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode='Markdown'
+        text,
+        parse_mode='Markdown',
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("🏠 Меню", callback_data='back_to_menu')
+        ]])
     )
 
 # ==================== ПОДДЕРЖКА ====================
@@ -2738,6 +2723,30 @@ async def create_mailing_handler(update: Update, context: ContextTypes.DEFAULT_T
     
     return MAILING_TARGETS
 
+async def cancel_mailing_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Отмена рассылки через callback"""
+    query = update.callback_query
+    await query.answer("❌ Рассылка отменена")
+    
+    # Очищаем данные
+    context.user_data.clear()
+    
+    # Удаляем сообщение
+    try:
+        await query.message.delete()
+    except:
+        pass
+    
+    # Отправляем в меню
+    user_id = update.effective_user.id
+    await context.bot.send_message(
+        chat_id=user_id,
+        text="❌ Рассылка отменена\n\n🏠 Главное меню:",
+        reply_markup=get_main_menu_keyboard(user_id)
+    )
+    
+    return ConversationHandler.END
+
 
 async def schedule_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик кнопки 'Планировщик'"""
@@ -3078,21 +3087,43 @@ def main():
     application.add_handler(CallbackQueryHandler(view_tariffs_callback, pattern='^view_tariffs$'))
     application.add_handler(CallbackQueryHandler(help_callback, pattern='^help$'))
     
+    # Тарифы
+    application.add_handler(CallbackQueryHandler(view_tariffs_callback, pattern='^view_tariffs$'))
+    application.add_handler(CallbackQueryHandler(select_plan_callback, pattern='^buy_'))
+    application.add_handler(CallbackQueryHandler(select_payment_method, pattern='^payment_method_'))
+    application.add_handler(CallbackQueryHandler(payment_sent, pattern='^paid_'))
+
     # Аккаунты
-    application.add_handler(CallbackQueryHandler(accounts_menu, pattern='^accounts_menu$'))
-    application.add_handler(CallbackQueryHandler(account_detail, pattern=r'^account_\d+$'))
-    application.add_handler(CallbackQueryHandler(delete_account_confirm, pattern=r'^delete_account_\d+$'))
-    application.add_handler(CallbackQueryHandler(confirm_delete_account, pattern=r'^confirm_delete_\d+$'))
+    application.add_handler(CallbackQueryHandler(accounts_menu_callback, pattern='^accounts_menu$'))
+    application.add_handler(CallbackQueryHandler(connect_userbot_start, pattern='^connect_userbot$'))
+    application.add_handler(CallbackQueryHandler(account_info_callback, pattern='^account_'))
+    application.add_handler(CallbackQueryHandler(delete_account_callback, pattern='^delete_account_'))
+    application.add_handler(CallbackQueryHandler(confirm_delete_account, pattern='^confirm_delete_'))
+    
+    # Статус
+    application.add_handler(CallbackQueryHandler(my_status_callback, pattern='^my_status$'))
+    
+    # Помощь
+    application.add_handler(CallbackQueryHandler(help_callback, pattern='^help$'))
     
     # Планировщик
     application.add_handler(CallbackQueryHandler(schedule_mailing_menu, pattern='^schedule_menu$'))
-    application.add_handler(CallbackQueryHandler(my_schedules, pattern='^my_schedules$'))
-    application.add_handler(CallbackQueryHandler(schedule_detail, pattern=r'^schedule_detail_\d+$'))
-    application.add_handler(CallbackQueryHandler(delete_schedule, pattern=r'^delete_schedule_\d+$'))
+    application.add_handler(CallbackQueryHandler(create_schedule_start, pattern='^create_schedule$'))
+    application.add_handler(CallbackQueryHandler(schedule_info_callback, pattern='^schedule_'))
+    application.add_handler(CallbackQueryHandler(delete_schedule_callback, pattern='^delete_schedule_'))
+    application.add_handler(CallbackQueryHandler(confirm_delete_schedule, pattern='^confirm_delete_schedule_'))
     
     # История
     application.add_handler(CallbackQueryHandler(mailing_history, pattern='^mailing_history$'))
     
+    # Рассылки
+    application.add_handler(CallbackQueryHandler(toggle_account_selection, pattern='^toggle_account_'))
+    application.add_handler(CallbackQueryHandler(select_all_accounts, pattern='^select_all_accounts$'))
+    application.add_handler(CallbackQueryHandler(deselect_all_accounts, pattern='^deselect_all_accounts$'))
+    application.add_handler(CallbackQueryHandler(continue_with_selected, pattern='^continue_with_selected$'))
+    application.add_handler(CallbackQueryHandler(start_user_mailing, pattern='^confirm_mailing$'))
+    application.add_handler(CallbackQueryHandler(cancel_mailing_callback, pattern='^cancel_mailing$'))
+
     # Платежи
     application.add_handler(CallbackQueryHandler(subscribe_plan, pattern=r'^subscribe_'))
     application.add_handler(CallbackQueryHandler(payment_sent, pattern=r'^paid_\d+$'))
