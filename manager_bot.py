@@ -673,6 +673,96 @@ async def payment_sent(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"❌ Error sending admin notification: {e}")
 
+async def select_payment_method(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Выбор способа оплаты"""
+    query = update.callback_query
+    await query.answer()
+    
+    # Парсим callback: payment_method_sber_starter
+    parts = query.data.split('_')
+    payment_method = parts[2]  # sber/tinkoff/yoomoney/usdt
+    plan_id = parts[3] if len(parts) > 3 else context.user_data.get('selected_plan')
+    
+    if not plan_id:
+        await query.edit_message_text(
+            "❌ Ошибка: тариф не выбран",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🏠 Меню", callback_data='back_to_menu')
+            ]])
+        )
+        return
+    
+    plan = SUBSCRIPTIONS.get(plan_id)
+    if not plan:
+        await query.edit_message_text(
+            "❌ Тариф не найден",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🏠 Меню", callback_data='back_to_menu')
+            ]])
+        )
+        return
+    
+    # Создаем платеж
+    user_id = update.effective_user.id
+    payment_id = db.add_payment(user_id, plan_id, plan['price'])
+    
+    if not payment_id:
+        await query.edit_message_text(
+            "❌ Ошибка создания платежа",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🏠 Меню", callback_data='back_to_menu')
+            ]])
+        )
+        return
+    
+    # Реквизиты в зависимости от метода
+    if payment_method == 'sber':
+        payment_details = (
+            "💳 *Сбербанк*\n\n"
+            "Карта: `2202 2068 7768 8616`\n"
+            "Получатель: Иван И.\n\n"
+        )
+    elif payment_method == 'tinkoff':
+        payment_details = (
+            "💳 *Тинькофф*\n\n"
+            "Карта: `5536 9137 7654 3210`\n"
+            "Получатель: Иван И.\n\n"
+        )
+    elif payment_method == 'yoomoney':
+        payment_details = (
+            "💰 *ЮMoney*\n\n"
+            "Кошелек: `410011234567890`\n\n"
+        )
+    elif payment_method == 'usdt':
+        payment_details = (
+            "₿ *USDT TRC20*\n\n"
+            "Адрес: `TQx5Yr8RqXKvn3p2J7mL9nS8WcD6FvH4Tz`\n\n"
+        )
+    else:
+        payment_details = ""
+    
+    text = (
+        f"💳 *Оплата {plan['name']}*\n\n"
+        f"Сумма: *{plan['price']}₽*\n"
+        f"ID платежа: #{payment_id}\n\n"
+        f"{payment_details}"
+        f"⚠️ *Важно:*\n"
+        f"1. Переведите точную сумму: {plan['price']}₽\n"
+        f"2. После оплаты нажмите кнопку ниже\n"
+        f"3. Ожидайте проверки (до 30 минут)\n\n"
+        f"❓ Вопросы: @{SUPPORT_USERNAME}"
+    )
+    
+    keyboard = [
+        [InlineKeyboardButton("✅ Я оплатил", callback_data=f"paid_{payment_id}")],
+        [InlineKeyboardButton("◀️ Назад", callback_data="view_tariffs")]
+    ]
+    
+    await query.edit_message_text(
+        text,
+        parse_mode='Markdown',
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
 
 async def approve_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Одобрение платежа (админ)"""
