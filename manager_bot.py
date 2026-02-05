@@ -3354,11 +3354,11 @@ def main():
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
     if name == '__main__':
-    try:
-        logger.info("="*50)
-        logger.info("🚀 Starting main() function...")
-        main()
-    except Exception as e:
-        logger.error(f"❌ CRITICAL ERROR in main(): {e}")
-        logger.exception("Full traceback:")
-        raise
+        try:
+            logger.info("="*50)
+            logger.info("🚀 Starting main() function...")
+            main()
+        except Exception as e:
+            logger.error(f"❌ CRITICAL ERROR in main(): {e}")
+            logger.exception("Full traceback:")
+            raise
