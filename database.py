@@ -22,10 +22,6 @@ class Database:
         self.conn = sqlite3.connect(db_path, check_same_thread=False)
         self._create_tables()
         logger.info("✅ Database initialized")
-		
-        def get_active_scheduled_mailings(self) -> List[Dict]:
-        """Получить все активные запланированные рассылки"""
-        return self.get_all_active_schedules()
     
     def _create_tables(self):
         """Создание таблиц"""
