@@ -31,7 +31,7 @@ from telegram.ext import (
 # Импорты из наших модулей
 from database import Database
 from userbot import UserbotManager
-from scheduler import MailingScheduler
+#from scheduler import MailingScheduler
 from config_userbot import (
     BOT_TOKEN,
     ADMIN_ID,
@@ -76,10 +76,11 @@ SUPPORT_MESSAGE = 300
 
 # ==================== ИНИЦИАЛИЗАЦИЯ ====================
 
-# Инициализация
+# Инициализация компонентов
 db = Database()
-userbot_manager = UserbotManager()
-# mailing_scheduler инициализируется в main() после создания application
+userbot_manager = UserbotManager(db)
+# scheduler = MailingScheduler(db, userbot_manager)  # ВРЕМЕННО ОТКЛЮЧЕН
+scheduler = None  # ВРЕМЕННАЯ ЗАГЛУШКА
 
 # ==================== КЛАВИАТУРЫ ====================
 
