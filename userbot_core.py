@@ -1,6 +1,4 @@
-﻿# Создай файл userbot_core.py (новое имя!)
-cat > userbot_core.py << 'EOF'
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
 """Userbot Manager module"""
@@ -151,4 +149,3 @@ class UserbotManager:
         """Отключить все"""
         for aid in list(self.clients.keys()):
             await self.disconnect_account(aid)
-EOF
