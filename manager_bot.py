@@ -217,6 +217,45 @@ def check_user_limits(user_id: int, action: str = 'account') -> dict:
     
     return {'allowed': True}
 
+async def accounts_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Меню аккаунтов через callback"""
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = update.effective_user.id
+    accounts = db.get_user_accounts(user_id)
+    
+    if not accounts:
+        text = (
+            "📱 *Управление аккаунтами*\n\n"
+            "У вас пока нет подключенных аккаунтов\n\n"
+            "Добавьте Telegram аккаунт для начала работы"
+        )
+        keyboard = [
+            [InlineKeyboardButton("➕ Добавить аккаунт", callback_data='connect_userbot')],
+            [InlineKeyboardButton("🏠 Меню", callback_data='back_to_menu')]
+        ]
+    else:
+        text = f"📱 *Управление аккаунтами*\n\nПодключено: {len(accounts)}\n\n"
+        
+        keyboard = []
+        for acc in accounts:
+            keyboard.append([
+                InlineKeyboardButton(
+                    f"📱 {acc['account_name']} ({acc['phone']})",
+                    callback_data=f"account_{acc['id']}"
+                )
+            ])
+        
+        keyboard.append([InlineKeyboardButton("➕ Добавить аккаунт", callback_data='connect_userbot')])
+        keyboard.append([InlineKeyboardButton("🏠 Меню", callback_data='back_to_menu')])
+    
+    await query.edit_message_text(
+        text,
+        parse_mode='Markdown',
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
 def get_user_status_text(user_id: int) -> str:
     """Получить текст статуса пользователя"""
     user_data = db.get_user(user_id)
