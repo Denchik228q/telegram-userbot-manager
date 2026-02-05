@@ -943,6 +943,58 @@ async def connect_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     return PHONE
 
+async def connect_userbot_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Начало подключения юзербота (callback версия)"""
+    query = update.callback_query
+    if query:
+        await query.answer()
+        user_id = update.effective_user.id
+        
+        # Проверяем лимиты
+        limits = check_user_limits(user_id, 'account')
+        if not limits['allowed']:
+            await query.edit_message_text(
+                f"⚠️ {limits['reason']}",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("💎 Тарифы", callback_data="view_tariffs"),
+                    InlineKeyboardButton("🏠 Меню", callback_data="back_to_menu")
+                ]])
+            )
+            return ConversationHandler.END
+        
+        await query.edit_message_text(
+            "📱 *Подключение аккаунта*\n\n"
+            "Шаг 1: Отправьте номер телефона\n\n"
+            "Формат: +79991234567\n"
+            "Или /cancel для отмены",
+            parse_mode='Markdown'
+        )
+        
+        return PHONE
+    else:
+        # Если вызвана как команда /connect
+        user_id = update.effective_user.id
+        
+        limits = check_user_limits(user_id, 'account')
+        if not limits['allowed']:
+            await update.message.reply_text(
+                f"⚠️ {limits['reason']}",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("💎 Тарифы", callback_data="view_tariffs")
+                ]])
+            )
+            return ConversationHandler.END
+        
+        await update.message.reply_text(
+            "📱 *Подключение аккаунта*\n\n"
+            "Шаг 1: Отправьте номер телефона\n\n"
+            "Формат: +79991234567\n"
+            "Или /cancel для отмены",
+            parse_mode='Markdown'
+        )
+        
+        return PHONE
+
 
 async def phone_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Получен номер телефона"""
@@ -3157,25 +3209,19 @@ async def admin_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ==================== MAIN ====================
 
 def main():
-    """Запуск бота"""
-    global mailing_scheduler
+    """Главная функция запуска бота"""
     
+    # Создаем приложение
     application = Application.builder().token(BOT_TOKEN).build()
-    
-    # ✅ Инициализация планировщика
-    mailing_scheduler = MailingScheduler(db, userbot_manager, application.bot)
-    mailing_scheduler.start()
-    
-    # ==================== КОМАНДЫ ====================
-    
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("cancel", cancel))
     
     # ==================== CONVERSATION HANDLERS ====================
     
-    # Подключение юзербота
+    # Подключение аккаунта
     connect_conv_handler = ConversationHandler(
-        entry_points=[CallbackQueryHandler(connect_start, pattern='^connect_userbot$')],
+        entry_points=[
+            CommandHandler('connect', connect_userbot_start),
+            CallbackQueryHandler(connect_userbot_start, pattern='^connect_userbot$')
+        ],
         states={
             PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, phone_received)],
             CODE: [MessageHandler(filters.TEXT & ~filters.COMMAND, code_received)],
@@ -3205,10 +3251,10 @@ def main():
             ],
             MAILING_CONFIRM: [
                 CallbackQueryHandler(start_user_mailing, pattern='^confirm_mailing$'),
-                CallbackQueryHandler(cancel, pattern='^cancel_mailing$')
+                CallbackQueryHandler(cancel_mailing_callback, pattern='^cancel_mailing$')
             ]
         },
-        fallbacks=[CommandHandler('cancel', cancel)],
+        fallbacks=[CommandHandler('cancel', cancel)]
     )
     application.add_handler(user_mailing_handler)
     
@@ -3218,52 +3264,52 @@ def main():
         states={
             SCHEDULE_TARGETS: [MessageHandler(filters.TEXT & ~filters.COMMAND, schedule_targets_received)],
             SCHEDULE_ACCOUNTS: [
-                CallbackQueryHandler(schedule_toggle_account, pattern=r'^sched_toggle_\d+$'),
-                CallbackQueryHandler(schedule_select_all_accounts, pattern='^sched_select_all$'),
-                CallbackQueryHandler(schedule_deselect_all_accounts, pattern='^sched_deselect_all$'),
-                CallbackQueryHandler(schedule_accounts_done, pattern='^sched_accounts_done$')
+                CallbackQueryHandler(toggle_schedule_account, pattern=r'^toggle_schedule_account_\d+$'),
+                CallbackQueryHandler(select_all_schedule_accounts, pattern='^select_all_schedule_accounts$'),
+                CallbackQueryHandler(continue_schedule_with_selected, pattern='^continue_schedule_with_selected$')
             ],
             SCHEDULE_MESSAGE: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, schedule_message_received),
-                MessageHandler(filters.PHOTO, schedule_message_received),
-                MessageHandler(filters.VIDEO, schedule_message_received)
+                MessageHandler(filters.PHOTO, schedule_message_received)
             ],
             SCHEDULE_TYPE: [
-                CallbackQueryHandler(schedule_type_selected, pattern='^sched_type_')
+                CallbackQueryHandler(schedule_type_selected, pattern='^schedule_type_')
             ],
             SCHEDULE_TIME: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, schedule_time_received)
             ],
             SCHEDULE_CONFIRM: [
-                CallbackQueryHandler(schedule_confirm_create, pattern='^confirm_schedule$'),
-                CallbackQueryHandler(schedule_cancel, pattern='^cancel_schedule$')
+                CallbackQueryHandler(create_schedule_confirm, pattern='^confirm_schedule$'),
+                CallbackQueryHandler(cancel, pattern='^cancel_schedule$')
             ]
         },
-        fallbacks=[CommandHandler('cancel', cancel)],
+        fallbacks=[CommandHandler('cancel', cancel)]
     )
     application.add_handler(schedule_handler)
+    
+    # ==================== ОСНОВНЫЕ КОМАНДЫ ====================
+    
+    application.add_handler(CommandHandler('start', start))
+    application.add_handler(CommandHandler('help', help_command))
     
     # ==================== CALLBACK HANDLERS ====================
     
     # Главное меню
     application.add_handler(CallbackQueryHandler(back_to_menu_callback, pattern='^back_to_menu$'))
     application.add_handler(CallbackQueryHandler(check_subscription_callback, pattern='^check_subscription$'))
-    application.add_handler(CallbackQueryHandler(my_status_callback, pattern='^my_status$'))
-    application.add_handler(CallbackQueryHandler(view_tariffs_callback, pattern='^view_tariffs$'))
-    application.add_handler(CallbackQueryHandler(help_callback, pattern='^help$'))
+    
+    # Аккаунты (УЖЕ в ConversationHandler, НЕ добавляем отдельно!)
+    # application.add_handler(CallbackQueryHandler(connect_userbot_start, pattern='^connect_userbot$'))  # УДАЛИ
+    application.add_handler(CallbackQueryHandler(accounts_menu_callback, pattern='^accounts_menu$'))
+    application.add_handler(CallbackQueryHandler(account_info_callback, pattern='^account_'))
+    application.add_handler(CallbackQueryHandler(delete_account_callback, pattern='^delete_account_'))
+    application.add_handler(CallbackQueryHandler(confirm_delete_account, pattern='^confirm_delete_'))
     
     # Тарифы
     application.add_handler(CallbackQueryHandler(view_tariffs_callback, pattern='^view_tariffs$'))
     application.add_handler(CallbackQueryHandler(select_plan_callback, pattern='^buy_'))
     application.add_handler(CallbackQueryHandler(select_payment_method, pattern='^payment_method_'))
     application.add_handler(CallbackQueryHandler(payment_sent, pattern='^paid_'))
-
-    # Аккаунты
-    application.add_handler(CallbackQueryHandler(accounts_menu_callback, pattern='^accounts_menu$'))
-    application.add_handler(CallbackQueryHandler(connect_userbot_start, pattern='^connect_userbot$'))
-    application.add_handler(CallbackQueryHandler(account_info_callback, pattern='^account_'))
-    application.add_handler(CallbackQueryHandler(delete_account_callback, pattern='^delete_account_'))
-    application.add_handler(CallbackQueryHandler(confirm_delete_account, pattern='^confirm_delete_'))
     
     # Статус
     application.add_handler(CallbackQueryHandler(my_status_callback, pattern='^my_status$'))
@@ -3273,7 +3319,6 @@ def main():
     
     # Планировщик
     application.add_handler(CallbackQueryHandler(schedule_mailing_menu, pattern='^schedule_menu$'))
-    application.add_handler(CallbackQueryHandler(create_schedule_start, pattern='^create_schedule$'))
     application.add_handler(CallbackQueryHandler(schedule_info_callback, pattern='^schedule_'))
     application.add_handler(CallbackQueryHandler(delete_schedule_callback, pattern='^delete_schedule_'))
     application.add_handler(CallbackQueryHandler(confirm_delete_schedule, pattern='^confirm_delete_schedule_'))
@@ -3281,30 +3326,18 @@ def main():
     # История
     application.add_handler(CallbackQueryHandler(mailing_history, pattern='^mailing_history$'))
     
-    # Рассылки
-    application.add_handler(CallbackQueryHandler(toggle_account_selection, pattern='^toggle_account_'))
-    application.add_handler(CallbackQueryHandler(select_all_accounts, pattern='^select_all_accounts$'))
-    application.add_handler(CallbackQueryHandler(deselect_all_accounts, pattern='^deselect_all_accounts$'))
-    application.add_handler(CallbackQueryHandler(continue_with_selected, pattern='^continue_with_selected$'))
-    application.add_handler(CallbackQueryHandler(start_user_mailing, pattern='^confirm_mailing$'))
-    application.add_handler(CallbackQueryHandler(cancel_mailing_callback, pattern='^cancel_mailing$'))
-
-    # Платежи
-    application.add_handler(CallbackQueryHandler(subscribe_plan, pattern=r'^subscribe_'))
-    application.add_handler(CallbackQueryHandler(payment_sent, pattern=r'^paid_\d+$'))
-    application.add_handler(CallbackQueryHandler(approve_payment, pattern=r'^approve_payment_\d+$'))
-    application.add_handler(CallbackQueryHandler(reject_payment, pattern=r'^reject_payment_\d+$'))
+    # Админ
+    if ADMIN_ID:
+        application.add_handler(CallbackQueryHandler(admin_menu_callback, pattern='^admin_menu$'))
+        application.add_handler(CallbackQueryHandler(admin_users_callback, pattern='^admin_users$'))
+        application.add_handler(CallbackQueryHandler(admin_payments_callback, pattern='^admin_payments$'))
+        application.add_handler(CallbackQueryHandler(approve_payment_callback, pattern='^approve_payment_'))
+        application.add_handler(CallbackQueryHandler(reject_payment_callback, pattern='^reject_payment_'))
+        application.add_handler(CallbackQueryHandler(admin_broadcast_start, pattern='^admin_broadcast$'))
+        application.add_handler(CallbackQueryHandler(admin_backup_callback, pattern='^admin_backup$'))
     
-    # Админка
-    application.add_handler(CallbackQueryHandler(admin_menu_callback, pattern='^admin_menu$'))
-    application.add_handler(CallbackQueryHandler(admin_stats, pattern='^admin_stats$'))
-    application.add_handler(CallbackQueryHandler(admin_users, pattern='^admin_users$'))
-    application.add_handler(CallbackQueryHandler(admin_payments, pattern='^admin_payments$'))
-    application.add_handler(CallbackQueryHandler(admin_backup, pattern='^admin_backup$'))
+    # ==================== ОБРАБОТЧИКИ КНОПОК МЕНЮ ====================
     
-    # ==================== MESSAGE HANDLERS ====================
-    
-    # Обработчики кнопок меню (должны быть ПЕРЕД общим handler)
     application.add_handler(MessageHandler(filters.Regex('^📱 Мои аккаунты$'), accounts_menu_handler))
     application.add_handler(MessageHandler(filters.Regex('^📨 Создать рассылку$'), create_mailing_handler))
     application.add_handler(MessageHandler(filters.Regex('^⏰ Планировщик$'), schedule_menu_handler))
@@ -3312,16 +3345,10 @@ def main():
     application.add_handler(MessageHandler(filters.Regex('^📊 Мой статус$'), status_handler))
     application.add_handler(MessageHandler(filters.Regex('^💎 Тарифы$'), tariffs_handler))
     application.add_handler(MessageHandler(filters.Regex('^ℹ️ Помощь$'), help_handler))
-    application.add_handler(MessageHandler(filters.Regex('^⚙️ Админ$'), admin_handler))
     
-    # Общий обработчик (должен быть ПОСЛЕДНИМ)
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, start))
+    if ADMIN_ID:
+        application.add_handler(MessageHandler(filters.Regex('^⚙️ Админ$'), admin_handler))
     
-    # ==================== ЗАПУСК ====================
-    
+    # Запуск
     logger.info("🤖 Bot starting...")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
-
-
-if __name__ == '__main__':
-    main()
