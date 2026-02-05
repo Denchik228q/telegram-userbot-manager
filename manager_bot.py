@@ -3210,13 +3210,20 @@ async def admin_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def main():
     """Главная функция запуска бота"""
+
+    logger.info("🔧 Step 1: Creating application...")
+    application = Application.builder().token(BOT_TOKEN).build()
+    logger.info("✅ Application created")
     
     # Создаем приложение
     application = Application.builder().token(BOT_TOKEN).build()
     
     # ==================== CONVERSATION HANDLERS ====================
+
+    logger.info("🔧 Step 2: Registering conversation handlers...")
     
     # Подключение аккаунта
+    logger.info("  - Registering connect_conv_handler...")
     connect_conv_handler = ConversationHandler(
         entry_points=[
             CommandHandler('connect', connect_userbot_start),
@@ -3230,8 +3237,10 @@ def main():
         fallbacks=[CommandHandler('cancel', cancel)]
     )
     application.add_handler(connect_conv_handler)
+    logger.info("  ✅ connect_conv_handler registered")
     
     # Рассылка
+    logger.info("  - Registering user_mailing_handler...")
     user_mailing_handler = ConversationHandler(
         entry_points=[
             MessageHandler(filters.Regex('^📨 Создать рассылку$'), create_mailing_handler)
@@ -3257,8 +3266,10 @@ def main():
         fallbacks=[CommandHandler('cancel', cancel)]
     )
     application.add_handler(user_mailing_handler)
+    logger.info("  ✅ user_mailing_handler registered")
     
     # Планировщик
+    logger.info("  - Registering schedule_handler...")
     schedule_handler = ConversationHandler(
         entry_points=[CallbackQueryHandler(create_schedule_start, pattern='^create_schedule$')],
         states={
@@ -3286,13 +3297,20 @@ def main():
         fallbacks=[CommandHandler('cancel', cancel)]
     )
     application.add_handler(schedule_handler)
+    logger.info("  ✅ schedule_handler registered")
+
+    logger.info("✅ All conversation handlers registered")
     
     # ==================== ОСНОВНЫЕ КОМАНДЫ ====================
     
+    logger.info("🔧 Step 3: Registering command handlers...")
     application.add_handler(CommandHandler('start', start))
     application.add_handler(CommandHandler('help', help_command))
+    logger.info("✅ Command handlers registered")
     
     # ==================== CALLBACK HANDLERS ====================
+
+    logger.info("🔧 Step 4: Registering callback handlers...")
     
     # Главное меню
     application.add_handler(CallbackQueryHandler(back_to_menu_callback, pattern='^back_to_menu$'))
@@ -3335,9 +3353,12 @@ def main():
         application.add_handler(CallbackQueryHandler(reject_payment_callback, pattern='^reject_payment_'))
         application.add_handler(CallbackQueryHandler(admin_broadcast_start, pattern='^admin_broadcast$'))
         application.add_handler(CallbackQueryHandler(admin_backup_callback, pattern='^admin_backup$'))
+
+    logger.info("✅ Callback handlers registered")
     
     # ==================== ОБРАБОТЧИКИ КНОПОК МЕНЮ ====================
     
+    logger.info("🔧 Step 5: Registering menu button handlers...")
     application.add_handler(MessageHandler(filters.Regex('^📱 Мои аккаунты$'), accounts_menu_handler))
     application.add_handler(MessageHandler(filters.Regex('^📨 Создать рассылку$'), create_mailing_handler))
     application.add_handler(MessageHandler(filters.Regex('^⏰ Планировщик$'), schedule_menu_handler))
@@ -3345,12 +3366,14 @@ def main():
     application.add_handler(MessageHandler(filters.Regex('^📊 Мой статус$'), status_handler))
     application.add_handler(MessageHandler(filters.Regex('^💎 Тарифы$'), tariffs_handler))
     application.add_handler(MessageHandler(filters.Regex('^ℹ️ Помощь$'), help_handler))
+    logger.info("✅ Menu button handlers registered")
     
     if ADMIN_ID:
         application.add_handler(MessageHandler(filters.Regex('^⚙️ Админ$'), admin_handler))
     
     # Запуск
-    logger.info("🤖 Bot starting...")
+    logger.info("="*50)
+    logger.info("🤖 Bot starting polling...")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
     if name == '__main__':
