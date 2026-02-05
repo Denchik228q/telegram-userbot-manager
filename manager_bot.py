@@ -2809,6 +2809,44 @@ async def accounts_menu_handler(update: Update, context: ContextTypes.DEFAULT_TY
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
+async def accounts_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Меню управления аккаунтами через callback"""
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = update.effective_user.id
+    accounts = db.get_user_accounts(user_id)
+    
+    if not accounts:
+        text = (
+            "📱 *Управление аккаунтами*\n\n"
+            "У вас пока нет подключенных аккаунтов\n\n"
+            "Добавьте Telegram аккаунт для начала работы"
+        )
+        keyboard = [
+            [InlineKeyboardButton("➕ Добавить аккаунт", callback_data='connect_userbot')],
+            [InlineKeyboardButton("🏠 Меню", callback_data='back_to_menu')]
+        ]
+    else:
+        text = f"📱 *Управление аккаунтами*\n\nПодключено: {len(accounts)}\n\n"
+        
+        keyboard = []
+        for acc in accounts:
+            keyboard.append([
+                InlineKeyboardButton(
+                    f"📱 {acc['account_name']} ({acc['phone']})",
+                    callback_data=f"account_{acc['id']}"
+                )
+            ])
+        
+        keyboard.append([InlineKeyboardButton("➕ Добавить аккаунт", callback_data='connect_userbot')])
+        keyboard.append([InlineKeyboardButton("🏠 Меню", callback_data='back_to_menu')])
+    
+    await query.edit_message_text(
+        text,
+        parse_mode='Markdown',
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
 
 async def create_mailing_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик кнопки 'Создать рассылку'"""
@@ -3171,7 +3209,6 @@ def main():
             ]
         },
         fallbacks=[CommandHandler('cancel', cancel)],
-        per_message=False
     )
     application.add_handler(user_mailing_handler)
     
@@ -3203,7 +3240,6 @@ def main():
             ]
         },
         fallbacks=[CommandHandler('cancel', cancel)],
-        per_message=False
     )
     application.add_handler(schedule_handler)
     
