@@ -30,7 +30,7 @@ from telegram.ext import (
 
 # Импорты из наших модулей
 from database import Database
-from userbot import UserbotManager
+from userbot_core import UserbotManager  # Новый файл!
 #from scheduler import MailingScheduler
 from config_userbot import (
     BOT_TOKEN,
@@ -78,7 +78,7 @@ SUPPORT_MESSAGE = 300
 
 # Инициализация компонентов
 db = Database()
-userbot_manager = UserbotManager(db)
+userbot_manager_fixed = UserbotManager(db)
 # scheduler = MailingScheduler(db, userbot_manager)  # ВРЕМЕННО ОТКЛЮЧЕН
 scheduler = None  # ВРЕМЕННАЯ ЗАГЛУШКА
 
