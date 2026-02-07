@@ -7,28 +7,44 @@ __pycache__/
 env/
 venv/
 ENV/
-*.egg-info/
-dist/
 build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
 
-# База данных
+# Database
 *.db
-*.db-journal
-bot.db
+*.sqlite
+*.sqlite3
 
-# Сессии
+# Sessions
 sessions/
 *.session
 *.session-journal
 
-# Бэкапы
+# Media
+media/
+
+# Backups
 backups/
+backup_*.db
 
-# Временные файлы
-temp_*
-*.tmp
+# Environment
+.env
+.env.local
 
-# Логи
+# Logs
 *.log
 
 # IDE
@@ -36,15 +52,8 @@ temp_*
 .idea/
 *.swp
 *.swo
+*~
 
 # OS
 .DS_Store
 Thumbs.db
-
-# Переменные окружения (если будешь использовать .env)
-.env.vs/
-*.vsidx
-*.suo
-*.user
-__pycache__/
-*.pyc
