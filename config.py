@@ -2,86 +2,168 @@
 # -*- coding: utf-8 -*-
 
 """
-Конфигурация для Telegram Userbot Manager
+Конфигурация бота
 """
 
 import os
-from datetime import timedelta
+from dotenv import load_dotenv
 
-# ============= TELEGRAM API =============
-API_ID = int(os.getenv('API_ID', '28890915'))
-API_HASH = os.getenv('API_HASH', '4984bb66f393bb411bd33674db81256e')
+# Загрузка переменных окружения
+load_dotenv()
 
-# ============= БОТЫ =============
-MANAGER_BOT_TOKEN = os.getenv('MANAGER_BOT_TOKEN', '8457587045:AAHellpvMkkHeJLVzYMCjKrE6smt9ekBja0')
+# ==================== ОСНОВНЫЕ НАСТРОЙКИ ====================
 
-# ============= АДМИНИСТРАТОР =============
-ADMIN_ID = int(os.getenv('ADMIN_ID', '5688880070'))
+BOT_TOKEN = os.getenv('BOT_TOKEN')
+API_ID = int(os.getenv('API_ID', '0'))
+API_HASH = os.getenv('API_HASH', '')
+ADMIN_ID = int(os.getenv('ADMIN_ID', '0'))
 
-# ============= КАНАЛЫ ДЛЯ ПОДПИСКИ =============
+# База данных
+DATABASE_PATH = os.getenv('DATABASE_PATH', 'bot_database.db')
 
-# Публичные каналы (формат: @username или https://t.me/username)
-CHANNEL_1_URL = os.getenv('CHANNEL_1_URL', '@your_channel_1')
-CHANNEL_2_URL = os.getenv('CHANNEL_2_URL', '@your_channel_2')
-CHANNEL_3_URL = os.getenv('CHANNEL_3_URL', '@your_channel_3')
+# ==================== ПЛАТЕЖИ ====================
 
-# Приватный канал (после оплаты)
-PRIVATE_CHANNEL_URL = os.getenv('PRIVATE_CHANNEL_URL', '@your_private_channel')
+YOOKASSA_SHOP_ID = os.getenv('YOOKASSA_SHOP_ID', '')
+YOOKASSA_SECRET_KEY = os.getenv('YOOKASSA_SECRET_KEY', '')
 
-# Названия каналов для кнопок
-CHANNEL_1_NAME = "📢 Основной канал"
-CHANNEL_2_NAME = "💎 VIP канал"
-CHANNEL_3_NAME = "🔔 Новости"
-PRIVATE_CHANNEL_NAME = "🔒 Приватный канал"
-
-# ============= ТАРИФНЫЕ ПЛАНЫ =============
-
-SUBSCRIPTIONS = {
-    'basic': {
-        'name': 'Basic Plan',
-        'price': 299,
-        'duration': 30,  # дней
-        'description': '• Подключение 1 юзербота\n• Доступ к приватному каналу\n• Базовая поддержка'
+PAYMENT_METHODS = {
+    'card': {
+        'name': '💳 Банковская карта',
+        'enabled': True
     },
-    'standard': {
-        'name': 'Standard Plan',
-        'price': 499,
-        'duration': 30,
-        'description': '• Подключение до 3 юзерботов\n• Приоритетная поддержка\n• Все функции Basic'
+    'yookassa': {
+        'name': '🔵 ЮКassa',
+        'enabled': bool(YOOKASSA_SHOP_ID and YOOKASSA_SECRET_KEY)
     },
-    'vip': {
-        'name': 'VIP Plan',
-        'price': 999,
-        'duration': 30,
-        'description': '• Безлимит юзерботов\n• VIP поддержка 24/7\n• Эксклюзивные функции'
-    },
-    'trial': {
-        'name': 'Trial',
-        'price': 0,
-        'duration': 3,
-        'description': '• Пробный период 3 дня\n• Ограниченный функционал'
+    'manual': {
+        'name': '📱 Ручной перевод',
+        'enabled': True
     }
 }
 
-# ============= БАЗА ДАННЫХ =============
-DATABASE_PATH = os.getenv('DATABASE_PATH', 'bot.db')
+# ==================== ТАРИФНЫЕ ПЛАНЫ ====================
 
-# ============= НАСТРОЙКИ РАССЫЛКИ =============
-MAILING_DELAY = float(os.getenv('MAILING_DELAY', '0.2'))  # секунд между сообщениями
+SUBSCRIPTION_PLANS = {
+    'trial': {
+        'name': '🎁 Пробный',
+        'price': 0,
+        'days': 3,
+        'description': 'Бесплатный пробный период на 3 дня',
+        'limits': {
+            'accounts': 1,
+            'mailings_per_day': 3,
+            'targets_per_mailing': 10,
+            'schedule_tasks': 0
+        }
+    },
+    'basic': {
+        'name': '📦 Базовый',
+        'price': 490,
+        'days': 30,
+        'description': 'Для начинающих пользователей',
+        'limits': {
+            'accounts': 3,
+            'mailings_per_day': 10,
+            'targets_per_mailing': 100,
+            'schedule_tasks': 2
+        }
+    },
+    'pro': {
+        'name': '🚀 Профи',
+        'price': 990,
+        'days': 30,
+        'description': 'Для активных пользователей',
+        'limits': {
+            'accounts': 10,
+            'mailings_per_day': 50,
+            'targets_per_mailing': 500,
+            'schedule_tasks': 10
+        }
+    },
+    'premium': {
+        'name': '💎 Премиум',
+        'price': 1990,
+        'days': 30,
+        'description': 'Без ограничений',
+        'limits': {
+            'accounts': -1,  # -1 = безлимит
+            'mailings_per_day': -1,
+            'targets_per_mailing': -1,
+            'schedule_tasks': -1
+        }
+    }
+}
 
-# ============= ЛОГИРОВАНИЕ =============
-LOG_LEVEL = os.getenv('LOG_LEVEL', 'INFO')
+# ==================== ТЕКСТЫ БОТА ====================
 
-# ============= НАСТРОЙКИ СЕССИЙ =============
-SESSIONS_DIR = os.getenv('SESSIONS_DIR', './sessions')
+TEXTS = {
+    'welcome': """
+👋 *Добро пожаловать в Manager Bot!*
 
-# ============= БЭКАПЫ =============
-BACKUP_DIR = os.getenv('BACKUP_DIR', './backups')
-AUTO_BACKUP = os.getenv('AUTO_BACKUP', 'True').lower() == 'true'
-BACKUP_INTERVAL_HOURS = int(os.getenv('BACKUP_INTERVAL_HOURS', '24'))
+🤖 Я помогу вам управлять рассылками через Telegram.
 
-# ============= ПРОВЕРКА ПОДПИСОК =============
-CHECK_SUBSCRIPTION_ON_START = os.getenv('CHECK_SUBSCRIPTION_ON_START', 'True').lower() == 'true'
+📊 *Ваша подписка:*
+• Тариф: {subscription}
+• Осталось дней: {days_left}
 
-# ============= ПРОЧЕЕ =============
-TRIAL_DAYS = int(os.getenv('TRIAL_DAYS', '3'))
+💡 *Возможности:*
+• Подключение нескольких аккаунтов
+• Массовые рассылки
+• Планировщик автоматических рассылок
+• Статистика и история
+
+Используйте меню ниже для начала работы 👇
+""",
+    
+    'help': """
+📖 *Справка по использованию бота*
+
+*📱 Мои аккаунты*
+Подключение и управление вашими Telegram аккаунтами
+
+*📨 Создать рассылку*
+Массовая отправка сообщений по списку
+
+*⏰ Планировщик*
+Автоматические рассылки по расписанию
+
+*📜 История*
+Просмотр всех ваших рассылок
+
+*💎 Тарифы*
+Информация о тарифных планах
+
+*ℹ️ Помощь*
+Это сообщение
+
+Нужна помощь? Напишите @your_support
+""",
+    
+    'no_accounts': """
+❌ *У вас нет подключенных аккаунтов*
+
+Для создания рассылок необходимо подключить хотя бы один Telegram аккаунт.
+
+Нажмите *📱 Мои аккаунты* → *➕ Подключить аккаунт*
+"""
+}
+
+# ==================== НАСТРОЙКИ БЭКАПОВ ====================
+
+BACKUP_ENABLED = os.getenv('BACKUP_ENABLED', 'true').lower() == 'true'
+BACKUP_INTERVAL_HOURS = int(os.getenv('BACKUP_INTERVAL_HOURS', '6'))
+BACKUP_CHAT_ID = int(os.getenv('BACKUP_CHAT_ID', os.getenv('ADMIN_ID', '0')))
+
+# ==================== НАСТРОЙКИ РАССЫЛОК ====================
+
+# Задержка между отправками (секунды)
+SEND_DELAY_MIN = 3
+SEND_DELAY_MAX = 5
+
+# Лимиты по умолчанию
+DEFAULT_LIMITS = {
+    'accounts': 1,
+    'mailings_per_day': 3,
+    'targets_per_mailing': 10,
+    'schedule_tasks': 0
+}
