@@ -68,7 +68,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     
     # Регистрируем пользователя
-    db.add_user(user.id, user.username, user.first_name, user.last_name)
+    db.add_user(user.id, {
+        'username' : user.username,
+        'first_name' : user.first_name,
+        'last_name' : user.last_name
+    })
     
     # Получаем данные пользователя
     user_data = db.get_user(user.id)
