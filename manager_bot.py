@@ -40,7 +40,7 @@ logger = logging.getLogger(__name__)
 # Инициализация компонентов
 db = Database()
 userbot_manager = UserbotManager(db)
-scheduler = MailingScheduler(db, userbot_manager)
+scheduler = None
 
 # Бэкап менеджер (если включен)
 backup_manager = None
