@@ -1,139 +1,146 @@
-﻿import asyncio
-import aiosqlite
-from datetime import datetime
-import shutil
+﻿#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+"""
+Менеджер резервного копирования базы данных
+"""
+
 import os
+import logging
+import shutil
+from datetime import datetime
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-async def create_backup():
-    """Создание бэкапа базы данных"""
-    
-    db_file = 'bot.db'
-    
-    if not os.path.exists(db_file):
-        print("❌ База данных не найдена!")
-        return
-    
-    # Создаём папку для бэкапов
-    backup_dir = 'backups'
-    os.makedirs(backup_dir, exist_ok=True)
-    
-    # Имя бэкапа с датой
-    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    backup_file = f"{backup_dir}/bot_backup_{timestamp}.db"
-    
-    try:
-        # Копируем базу
-        shutil.copy2(db_file, backup_file)
-        
-        # Проверяем что скопировалось
-        db = await aiosqlite.connect(backup_file)
-        cursor = await db.execute('SELECT COUNT(*) FROM users')
-        count = (await cursor.fetchone())[0]
-        await db.close()
-        
-        print(f"✅ Бэкап создан: {backup_file}")
-        print(f"📊 Пользователей в бэкапе: {count}")
-        
-        return backup_file
-        
-    except Exception as e:
-        print(f"❌ Ошибка создания бэкапа: {e}")
-        return None
+logger = logging.getLogger(__name__)
 
 
-async def list_backups():
-    """Список бэкапов"""
-    backup_dir = 'backups'
+class BackupManager:
+    """Управление бэкапами базы данных"""
     
-    if not os.path.exists(backup_dir):
-        print("📁 Папка с бэкапами пуста")
-        return
-    
-    backups = sorted([f for f in os.listdir(backup_dir) if f.endswith('.db')])
-    
-    if not backups:
-        print("📁 Бэкапы не найдены")
-        return
-    
-    print(f"\n📋 Найдено бэкапов: {len(backups)}\n")
-    
-    for backup in backups:
-        filepath = os.path.join(backup_dir, backup)
-        size = os.path.getsize(filepath) / 1024  # KB
-        mtime = datetime.fromtimestamp(os.path.getmtime(filepath))
+    def __init__(self, db, bot_token, chat_id, interval_hours=6):
+        """
+        Инициализация менеджера бэкапов
         
-        print(f"📦 {backup}")
-        print(f"   Размер: {size:.1f} KB")
-        print(f"   Дата: {mtime.strftime('%Y-%m-%d %H:%M:%S')}\n")
-
-
-async def restore_backup(backup_file):
-    """Восстановление из бэкапа"""
-    
-    if not os.path.exists(backup_file):
-        print(f"❌ Файл не найден: {backup_file}")
-        return False
-    
-    try:
-        # Создаём бэкап текущей базы перед восстановлением
-        current_backup = await create_backup()
-        print(f"💾 Текущая база сохранена: {current_backup}")
+        Args:
+            db: Объект базы данных
+            bot_token: Токен бота для отправки файлов
+            chat_id: ID чата для отправки бэкапов
+            interval_hours: Интервал создания бэкапов (часы)
+        """
+        self.db = db
+        self.bot_token = bot_token
+        self.chat_id = chat_id
+        self.interval_hours = interval_hours
+        self.scheduler = AsyncIOScheduler()
         
-        # Восстанавливаем из бэкапа
-        shutil.copy2(backup_file, 'bot.db')
+        # Создаём папку для бэкапов
+        self.backup_dir = 'backups'
+        os.makedirs(self.backup_dir, exist_ok=True)
         
-        # Проверяем
-        db = await aiosqlite.connect('bot.db')
-        cursor = await db.execute('SELECT COUNT(*) FROM users')
-        count = (await cursor.fetchone())[0]
-        await db.close()
+        # Запускаем планировщик
+        self._start_scheduler()
         
-        print(f"✅ База восстановлена из: {backup_file}")
-        print(f"📊 Пользователей: {count}")
-        
-        return True
-        
-    except Exception as e:
-        print(f"❌ Ошибка восстановления: {e}")
-        return False
-
-
-async def main():
-    """Главное меню"""
-    print("=" * 50)
-    print("🔧 УПРАВЛЕНИЕ БЭКАПАМИ БД")
-    print("=" * 50)
-    print("\n1. Создать бэкап")
-    print("2. Показать все бэкапы")
-    print("3. Восстановить из бэкапа")
-    print("4. Выход\n")
+        logger.info(f"💾 BackupManager initialized (interval: {interval_hours}h)")
     
-    choice = input("Выберите действие (1-4): ").strip()
+    def _start_scheduler(self):
+        """Запуск планировщика бэкапов"""
+        try:
+            # Добавляем задачу
+            self.scheduler.add_job(
+                self._create_backup,
+                'interval',
+                hours=self.interval_hours,
+                id='auto_backup'
+            )
+            
+            # Запускаем
+            self.scheduler.start()
+            logger.info("✅ Backup scheduler started")
+            
+        except Exception as e:
+            logger.error(f"Error starting backup scheduler: {e}")
     
-    if choice == '1':
-        await create_backup()
+    async def _create_backup(self):
+        """Создание бэкапа"""
+        try:
+            # Имя файла с временной меткой
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            backup_filename = f"backup_{timestamp}.db"
+            backup_path = os.path.join(self.backup_dir, backup_filename)
+            
+            # Копируем базу данных
+            shutil.copy2(self.db.db_path, backup_path)
+            
+            logger.info(f"✅ Backup created: {backup_filename}")
+            
+            # Отправляем админу
+            await self._send_backup_to_admin(backup_path, backup_filename)
+            
+            # Очищаем старые бэкапы (оставляем последние 5)
+            self._cleanup_old_backups()
+            
+            return backup_path
+            
+        except Exception as e:
+            logger.error(f"Error creating backup: {e}")
+            return None
     
-    elif choice == '2':
-        await list_backups()
+    async def _send_backup_to_admin(self, file_path, filename):
+        """Отправка бэкапа администратору"""
+        try:
+            from telegram import Bot
+            
+            bot = Bot(token=self.bot_token)
+            
+            with open(file_path, 'rb') as f:
+                await bot.send_document(
+                    chat_id=self.chat_id,
+                    document=f,
+                    filename=filename,
+                    caption=f"💾 Автоматический бэкап базы данных\n"
+                            f"📅 {datetime.now().strftime('%d.%m.%Y %H:%M:%S')}"
+                )
+            
+            logger.info(f"✅ Backup sent to admin (chat_id: {self.chat_id})")
+            
+        except Exception as e:
+            logger.error(f"Error sending backup to admin: {e}")
     
-    elif choice == '3':
-        await list_backups()
-        backup_name = input("\nВведите имя файла для восстановления: ").strip()
-        backup_path = os.path.join('backups', backup_name)
+    def _cleanup_old_backups(self, keep_last=5):
+        """Удаление старых бэкапов"""
+        try:
+            # Получаем список всех бэкапов
+            backups = []
+            for filename in os.listdir(self.backup_dir):
+                if filename.startswith('backup_') and filename.endswith('.db'):
+                    filepath = os.path.join(self.backup_dir, filename)
+                    backups.append((filepath, os.path.getmtime(filepath)))
+            
+            # Сортируем по времени (новые первыми)
+            backups.sort(key=lambda x: x[1], reverse=True)
+            
+            # Удаляем старые
+            for filepath, _ in backups[keep_last:]:
+                os.remove(filepath)
+                logger.info(f"🗑️ Removed old backup: {os.path.basename(filepath)}")
+                
+        except Exception as e:
+            logger.error(f"Error cleaning up backups: {e}")
+    
+    async def manual_backup(self):
+        """Ручное создание бэкапа"""
+        logger.info("📦 Creating manual backup...")
+        result = await self._create_backup()
         
-        confirm = input(f"⚠️ Восстановить из {backup_name}? (yes/no): ").strip().lower()
-        if confirm == 'yes':
-            await restore_backup(backup_path)
+        if result:
+            return "✅ Бэкап успешно создан и отправлен"
         else:
-            print("❌ Отменено")
+            return "❌ Ошибка создания бэкапа"
     
-    elif choice == '4':
-        print("👋 До свидания!")
-        return
-    
-    else:
-        print("❌ Неверный выбор")
-
-
-if __name__ == '__main__':
-    asyncio.run(main())
+    def shutdown(self):
+        """Остановка планировщика"""
+        try:
+            self.scheduler.shutdown()
+            logger.info("🛑 Backup scheduler stopped")
+        except:
+            pass
