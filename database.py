@@ -106,7 +106,7 @@ class Database:
     
     def add_user(self, user_id, username=None, first_name=None, last_name=None):
         """Добавить или обновить пользователя"""
-    try:
+        try:
         cursor = self.conn.cursor()
         
         # Проверяем существует ли
