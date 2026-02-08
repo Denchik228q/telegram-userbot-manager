@@ -129,7 +129,7 @@ class Database:
         
         self.conn.commit()
         logger.info(f"✅ User {user_id} registered/updated successfully")
-            return True
+        return True
         
     except Exception as e:
         logger.error(f"Error adding user: {e}")
