@@ -2244,6 +2244,244 @@ async def reject_payment_callback(update: Update, context: ContextTypes.DEFAULT_
     query = update.callback_query
     await query.answer("Функция в разработке")
 
+# ==================== ОБРАБОТЧИКИ КНОПОК ГЛАВНОГО МЕНЮ ====================
+
+async def create_mailing_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Кнопка: Создать рассылку"""
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = query.from_user.id
+    logger.info(f"User {user_id} pressed: create_mailing")
+    
+    # Проверяем есть ли аккаунты
+    accounts = db.get_user_accounts(user_id)
+    
+    if not accounts:
+        await query.edit_message_text(
+            "❌ У вас нет подключенных аккаунтов\n\n"
+            "Подключите хотя бы один аккаунт для создания рассылок.",
+            parse_mode='Markdown',
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("📱 Подключить аккаунт", callback_data="connect_account"),
+                InlineKeyboardButton("◀️ Назад", callback_data="main_menu")
+            ]])
+        )
+        return
+    
+    # Если аккаунты есть - запускаем процесс создания рассылки
+    await query.edit_message_text(
+        "📨 *Создание рассылки*\n\n"
+        "Эта функция в разработке.\n\n"
+        "Скоро вы сможете:\n"
+        "• Выбрать аккаунты для рассылки\n"
+        "• Загрузить список получателей\n"
+        "• Настроить текст сообщения\n"
+        "• Установить интервалы отправки",
+        parse_mode='Markdown',
+        reply_markup=get_back_button("main_menu")
+    )
+
+
+async def scheduler_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Кнопка: Планировщик"""
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = query.from_user.id
+    logger.info(f"User {user_id} pressed: scheduler")
+    
+    await query.edit_message_text(
+        "⏰ *Планировщик рассылок*\n\n"
+        "Функция в разработке.\n\n"
+        "Скоро вы сможете:\n"
+        "• Создавать расписания рассылок\n"
+        "• Настраивать автоматические рассылки\n"
+        "• Устанавливать повторяющиеся задачи\n"
+        "• Управлять активными расписаниями",
+        parse_mode='Markdown',
+        reply_markup=get_back_button("main_menu")
+    )
+
+
+async def history_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Кнопка: История"""
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = query.from_user.id
+    logger.info(f"User {user_id} pressed: history")
+    
+    # Получаем историю рассылок (если есть в БД)
+    # mailings = db.get_user_mailings(user_id, limit=10)
+    
+    text = "📜 *История рассылок*\n\n"
+    text += "У вас пока нет завершённых рассылок.\n\n"
+    text += "После создания рассылок здесь будет отображаться:\n"
+    text += "• Статус рассылок\n"
+    text += "• Количество отправленных сообщений\n"
+    text += "• Дата и время выполнения"
+    
+    await query.edit_message_text(
+        text,
+        parse_mode='Markdown',
+        reply_markup=get_back_button("main_menu")
+    )
+
+
+async def subscriptions_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Кнопка: Тарифы"""
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = query.from_user.id
+    logger.info(f"User {user_id} pressed: subscriptions")
+    
+    # Получаем данные пользователя
+    user_data = db.get_user(user_id)
+    
+    if not user_data:
+        user_data = {'subscription_plan': 'trial'}
+    
+    current_plan = user_data.get('subscription_plan', 'trial')
+    
+    # Формируем текст с тарифами
+    text = "💎 *Доступные тарифы:*\n\n"
+    
+    for plan_id, plan in SUBSCRIPTION_PLANS.items():
+        is_current = (plan_id == current_plan)
+        status = " ✅ *Текущий*" if is_current else ""
+        
+        text += f"*{plan['name']}*{status}\n"
+        text += f"💰 {plan['price']} ₽/мес\n"
+        text += f"📝 {plan['description']}\n"
+        
+        # Лимиты
+        limits = plan['limits']
+        text += f"📊 Лимиты:\n"
+        text += f"   • Аккаунты: {limits['accounts'] if limits['accounts'] != -1 else '∞'}\n"
+        text += f"   • Рассылки: {limits['mailings_per_day'] if limits['mailings_per_day'] != -1 else '∞'}/день\n"
+        text += f"   • Сообщения: {limits['messages_per_mailing'] if limits['messages_per_mailing'] != -1 else '∞'}/рассылка\n\n"
+    
+    # Используем функцию из keyboards.py
+    keyboard = get_subscription_menu(current_plan)
+    
+    await query.edit_message_text(
+        text,
+        parse_mode='Markdown',
+        reply_markup=keyboard
+    )
+
+
+async def help_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Кнопка: Помощь"""
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = query.from_user.id
+    logger.info(f"User {user_id} pressed: help")
+    
+    text = TEXTS['help']
+    
+    await query.edit_message_text(
+        text,
+        reply_markup=get_back_button("main_menu")
+    )
+
+
+async def admin_panel_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Кнопка: Админ-панель"""
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = query.from_user.id
+    
+    # Проверка прав администратора
+    if user_id != ADMIN_ID:
+        await query.answer("❌ У вас нет доступа к админ-панели", show_alert=True)
+        return
+    
+    logger.info(f"Admin {user_id} opened admin panel")
+    
+    # Получаем статистику
+    cursor = db.conn.cursor()
+    
+    # Количество пользователей
+    cursor.execute("SELECT COUNT(*) FROM users")
+    total_users = cursor.fetchone()[0]
+    
+    # Активные подписки
+    cursor.execute("SELECT COUNT(*) FROM users WHERE subscription_end > datetime('now')")
+    active_subs = cursor.fetchone()[0]
+    
+    # Всего аккаунтов
+    cursor.execute("SELECT COUNT(*) FROM accounts WHERE is_active = 1")
+    total_accounts = cursor.fetchone()[0]
+    
+    # Рассылки за сегодня
+    cursor.execute("SELECT COUNT(*) FROM mailings WHERE DATE(created_at) = DATE('now')")
+    today_mailings = cursor.fetchone()[0]
+    
+    text = "👨‍💼 *Админ-панель*\n\n"
+    text += f"👥 Всего пользователей: {total_users}\n"
+    text += f"💎 Активных подписок: {active_subs}\n"
+    text += f"📱 Подключённых аккаунтов: {total_accounts}\n"
+    text += f"📨 Рассылок сегодня: {today_mailings}\n\n"
+    
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("👥 Пользователи", callback_data="admin_users")],
+        [InlineKeyboardButton("💰 Платежи", callback_data="admin_payments")],
+        [InlineKeyboardButton("📊 Статистика", callback_data="admin_stats")],
+        [InlineKeyboardButton("💾 Бэкап БД", callback_data="admin_backup")],
+        [InlineKeyboardButton("📢 Рассылка всем", callback_data="admin_broadcast")],
+        [InlineKeyboardButton("◀️ Назад", callback_data="main_menu")]
+    ])
+    
+    await query.edit_message_text(
+        text,
+        parse_mode='Markdown',
+        reply_markup=keyboard
+    )
+
+
+async def main_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Кнопка: Назад (в главное меню)"""
+    query = update.callback_query
+    await query.answer()
+    
+    user = query.from_user
+    user_id = user.id
+    is_admin = (user_id == ADMIN_ID)
+    
+    logger.info(f"User {user_id} returned to main menu")
+    
+    # Получаем данные пользователя
+    user_data = db.get_user(user_id)
+    
+    if not user_data:
+        user_data = {'subscription_plan': 'trial', 'subscription_end': None}
+    
+    # Проверяем подписку
+    plan_id = user_data.get('subscription_plan', 'trial')
+    plan = SUBSCRIPTION_PLANS.get(plan_id, SUBSCRIPTION_PLANS['trial'])
+    
+    is_active = check_subscription(user_data)
+    days_left = get_days_left(user_data)
+    
+    subscription_text = f"{plan['name']} ({'✅ активна' if is_active else '❌ истекла'})"
+    
+    # Формируем текст
+    welcome_text = TEXTS['welcome'].format(
+        subscription=subscription_text,
+        days_left=days_left
+    )
+    
+    await query.edit_message_text(
+        welcome_text,
+        parse_mode='Markdown',
+        reply_markup=get_main_menu(is_admin)
+    )
+
 
 # ==================== ГЛАВНАЯ ФУНКЦИЯ ====================
 
@@ -2316,6 +2554,24 @@ def main():
     application.add_handler(connect_conv)
     application.add_handler(mailing_conv)
     application.add_handler(admin_broadcast_conv)
+
+     # Главное меню
+    application.add_handler(CallbackQueryHandler(main_menu_callback, pattern="^main_menu$"))
+    application.add_handler(CallbackQueryHandler(my_accounts_callback, pattern="^my_accounts$"))
+    application.add_handler(CallbackQueryHandler(create_mailing_callback, pattern="^create_mailing$"))
+    application.add_handler(CallbackQueryHandler(scheduler_callback, pattern="^scheduler$"))
+    application.add_handler(CallbackQueryHandler(history_callback, pattern="^history$"))
+    application.add_handler(CallbackQueryHandler(subscriptions_callback, pattern="^subscriptions$"))
+    application.add_handler(CallbackQueryHandler(help_callback, pattern="^help$"))
+    
+    # Аккаунты
+    application.add_handler(CallbackQueryHandler(connect_account_start, pattern="^connect_account$"))
+    application.add_handler(CallbackQueryHandler(manage_accounts_callback, pattern="^manage_accounts$"))
+    application.add_handler(CallbackQueryHandler(disconnect_account_callback, pattern="^disconnect_account_"))
+    
+    # Подписки
+    application.add_handler(CallbackQueryHandler(buy_subscription_callback, pattern="^buy_"))
+    application.add_handler(CallbackQueryHandler(payment_method_callback, pattern="^payment_"))
     
     # Callback handlers
     application.add_handler(CallbackQueryHandler(back_to_menu_callback, pattern="^back_to_menu$"))
@@ -2335,6 +2591,7 @@ def main():
     application.add_handler(CallbackQueryHandler(accounts_back_callback, pattern="^accounts_back$"))
     
     # Админ callbacks
+    application.add_handler(CallbackQueryHandler(admin_panel_callback, pattern="^admin_panel$"))
     application.add_handler(CallbackQueryHandler(admin_users_callback, pattern="^admin_users$"))
     application.add_handler(CallbackQueryHandler(admin_payments_callback, pattern="^admin_payments$"))
     application.add_handler(CallbackQueryHandler(admin_stats_callback, pattern="^admin_stats$"))
