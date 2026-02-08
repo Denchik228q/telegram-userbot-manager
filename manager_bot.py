@@ -64,25 +64,28 @@ ADMIN_BROADCAST_MESSAGE = 13
 # ==================== ОСНОВНЫЕ КОМАНДЫ ====================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Команда /start"""
+    """Обработчик команды /start"""
     user = update.effective_user
     
-    # Регистрируем пользователя
-    db.add_user(user.id, {
-        'username' : user.username,
-        'first_name' : user.first_name,
-        'last_name' : user.last_name
-    })
+    # ✅ ПРАВИЛЬНО: передаём параметры отдельно
+    db.add_user(user.id, user.username, user.first_name, user.last_name)
+    
+    # Логируем действие
+    db.add_log(user.id, 'start', 'User started bot')
     
     # Получаем данные пользователя
     user_data = db.get_user(user.id)
     
-    # Проверяем подписку
-    is_active = check_subscription(user_data)
-    days_left = get_days_left(user_data)
+    # Проверка на None
+    if not user_data:
+        user_data = {'subscription_plan': 'trial', 'subscription_end': None}
     
+    # Проверяем подписку
     plan_id = user_data.get('subscription_plan', 'trial')
     plan = SUBSCRIPTION_PLANS.get(plan_id, SUBSCRIPTION_PLANS['trial'])
+    
+    is_active = check_subscription(user_data)
+    days_left = get_days_left(user_data)
     
     subscription_text = f"{plan['name']} ({'✅ активна' if is_active else '❌ истекла'})"
     
@@ -92,8 +95,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         days_left=days_left
     )
     
-    # Отправляем с клавиатурой
-    is_admin = user.id == ADMIN_ID
+    # Определяем является ли админом
+    is_admin = (user.id == ADMIN_ID)
+    
+    # Отправляем приветствие
     await update.message.reply_text(
         welcome_text,
         parse_mode='Markdown',
@@ -105,7 +110,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Команда /help"""
     await update.message.reply_text(
         TEXTS['help'],
-        parse_mode='Markdown'
+        parse_mode='Markdown'  # ← Проблема в TEXTS['help']
     )
 
 
