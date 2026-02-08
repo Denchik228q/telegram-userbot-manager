@@ -131,10 +131,10 @@ class Database:
         logger.info(f"✅ User {user_id} registered/updated successfully")
         return True
         
-    except Exception as e:
-        logger.error(f"Error adding user: {e}")
-        self.conn.rollback()
-        return False
+        except Exception as e:
+            logger.error(f"Error adding user: {e}")
+            self.conn.rollback()
+            return False
     
     def get_user(self, user_id: int) -> Optional[Dict]:
         """Получить данные пользователя"""
