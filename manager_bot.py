@@ -1525,6 +1525,79 @@ async def admin_back_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 # ==================== ОБРАБОТЧИКИ ТЕКСТОВЫХ КОМАНД ====================
 
+async def my_accounts_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Кнопка: Мои аккаунты"""
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = query.from_user.id
+    logger.info(f"User {user_id} pressed: my_accounts")
+    
+    # Получаем аккаунты
+    accounts = db.get_user_accounts(user_id)
+    
+    if not accounts:
+        text = "❌ У вас нет подключенных аккаунтов\n\nПодключите аккаунт для начала работы."
+    else:
+        text = f"📱 *Ваши аккаунты ({len(accounts)}):*\n\n"
+        for acc in accounts:
+            status = "✅" if acc['is_active'] else "❌"
+            name = acc.get('account_name') or acc['phone']
+            text += f"{status} {name} ({acc['phone']})\n"
+    
+    keyboard = get_accounts_menu()
+    
+    await query.edit_message_text(
+        text,
+        parse_mode='Markdown',
+        reply_markup=keyboard
+    )
+
+
+async def help_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Кнопка: Помощь"""
+    query = update.callback_query
+    await query.answer()
+    
+    logger.info(f"User {query.from_user.id} pressed: help")
+    
+    text = TEXTS['help']
+    
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("◀️ Назад", callback_data="main_menu")]
+    ])
+    
+    await query.edit_message_text(
+        text,
+        parse_mode='Markdown',
+        reply_markup=keyboard
+    )
+
+
+async def main_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Возврат в главное меню"""
+    query = update.callback_query
+    await query.answer()
+    
+    user = query.from_user
+    is_admin = (user.id == ADMIN_ID)
+    
+    user_data = db.get_user(user.id)
+    plan_id = user_data.get('subscription_plan', 'trial')
+    plan = SUBSCRIPTION_PLANS[plan_id]
+    days_left = get_days_left(user_data)
+    
+    text = TEXTS['welcome'].format(
+        subscription=plan['name'],
+        days_left=days_left
+    )
+    
+    await query.edit_message_text(
+        text,
+        parse_mode='Markdown',
+        reply_markup=get_main_menu(is_admin)
+    )
+
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработка текстовых команд из ReplyKeyboard"""
     text = update.message.text
@@ -1645,6 +1718,9 @@ def main():
     application.add_handler(CallbackQueryHandler(list_schedules_callback, pattern="^list_schedules$"))
     application.add_handler(CallbackQueryHandler(schedule_info_callback, pattern="^schedule_info_"))
     application.add_handler(CallbackQueryHandler(delete_schedule_callback, pattern="^delete_schedule_"))
+    application.add_handler(CallbackQueryHandler(my_accounts_callback, pattern="^my_accounts$"))
+    application.add_handler(CallbackQueryHandler(connect_account_start, pattern="^connect_account$"))
+    application.add_handler(CallbackQueryHandler(accounts_back_callback, pattern="^accounts_back$"))
     
     # Админ callbacks
     application.add_handler(CallbackQueryHandler(admin_users_callback, pattern="^admin_users$"))
