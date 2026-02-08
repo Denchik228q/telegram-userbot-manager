@@ -107,34 +107,34 @@ class Database:
     def add_user(self, user_id, username=None, first_name=None, last_name=None):
         """Добавить или обновить пользователя"""
         try:
-        cursor = self.conn.cursor()
+            cursor = self.conn.cursor()
         
-        # Проверяем существует ли
-        cursor.execute("SELECT id FROM users WHERE user_id = ?", (user_id,))
-        exists = cursor.fetchone()
+            # Проверяем существует ли
+            cursor.execute("SELECT id FROM users WHERE user_id = ?", (user_id,))
+            exists = cursor.fetchone()
         
-        if exists:
-            # Обновляем
-            cursor.execute("""
-                UPDATE users 
-                SET username = ?, first_name = ?, last_name = ?, last_active = ?
-                WHERE user_id = ?
-            """, (username, first_name, last_name, datetime.now(), user_id))
-        else:
-            # Создаём нового
-            cursor.execute("""
-                INSERT INTO users (user_id, username, first_name, last_name, subscription_plan, subscription_end)
-                VALUES (?, ?, ?, ?, 'trial', datetime('now', '+7 days'))
-            """, (user_id, username, first_name, last_name))
+            if exists:
+                # Обновляем
+                cursor.execute("""
+                    UPDATE users 
+                    SET username = ?, first_name = ?, last_name = ?, last_active = ?
+                    WHERE user_id = ?
+                """, (username, first_name, last_name, datetime.now(), user_id))
+            else:
+                # Создаём нового
+                cursor.execute("""
+                    INSERT INTO users (user_id, username, first_name, last_name, subscription_plan, subscription_end)
+                    VALUES (?, ?, ?, ?, 'trial', datetime('now', '+7 days'))
+                """, (user_id, username, first_name, last_name))
         
-        self.conn.commit()
-        logger.info(f"✅ User {user_id} registered/updated successfully")
-        return True
+            self.conn.commit()
+            logger.info(f"✅ User {user_id} registered/updated successfully")
+            return True
         
-    except Exception as e:
-        logger.error(f"Error adding user: {e}")
-        self.conn.rollback()
-        return False
+        except Exception as e:
+            logger.error(f"Error adding user: {e}")
+            self.conn.rollback()
+            return False
     
     def get_user(self, user_id: int) -> Optional[Dict]:
         """Получить данные пользователя"""
