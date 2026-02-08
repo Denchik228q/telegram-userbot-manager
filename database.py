@@ -105,7 +105,7 @@ class Database:
     # ==================== ПОЛЬЗОВАТЕЛИ ====================
     
     def add_user(self, user_id, username=None, first_name=None, last_name=None):
-    """Добавить или обновить пользователя"""
+        """Добавить или обновить пользователя"""
     try:
         cursor = self.conn.cursor()
         
