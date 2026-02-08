@@ -1633,6 +1633,214 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 
+# ==================== ОБРАБОТЧИКИ ПОДКЛЮЧЕНИЯ АККАУНТОВ ====================
+
+async def connect_account_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Начало подключения аккаунта (через кнопку)"""
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = query.from_user.id
+    logger.info(f"User {user_id} started account connection")
+    
+    # Проверяем лимит аккаунтов
+    user_data = db.get_user(user_id)
+    plan_id = user_data.get('subscription_plan', 'trial')
+    plan = SUBSCRIPTION_PLANS[plan_id]
+    
+    current_accounts = len(db.get_user_accounts(user_id))
+    max_accounts = plan['limits']['accounts']
+    
+    if max_accounts != -1 and current_accounts >= max_accounts:
+        await query.edit_message_text(
+            f"❌ Достигнут лимит аккаунтов ({max_accounts})\n\n"
+            f"Обновите тариф для подключения большего количества аккаунтов.",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("💎 Тарифы", callback_data="subscriptions"),
+                InlineKeyboardButton("◀️ Назад", callback_data="my_accounts")
+            ]])
+        )
+        return ConversationHandler.END
+    
+    # Запрашиваем номер телефона
+    await query.edit_message_text(
+        "📱 *Подключение аккаунта*\n\n"
+        "Отправьте номер телефона в международном формате:\n"
+        "Пример: `+79991234567`\n\n"
+        "Или /cancel для отмены",
+        parse_mode='Markdown'
+    )
+    
+    return PHONE
+
+
+async def phone_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка номера телефона"""
+    user_id = update.effective_user.id
+    phone = update.message.text.strip()
+    
+    # Валидация номера
+    if not phone.startswith('+') or not phone[1:].isdigit():
+        await update.message.reply_text(
+            "❌ Неверный формат номера!\n\n"
+            "Используйте международный формат: `+79991234567`",
+            parse_mode='Markdown'
+        )
+        return PHONE
+    
+    # Сохраняем номер
+    context.user_data['phone'] = phone
+    
+    # Инициируем подключение через Telethon
+    try:
+        await update.message.reply_text("⏳ Отправляю код...")
+        
+        # Используем userbot_manager для отправки кода
+        result = await userbot_manager.send_code(user_id, phone)
+        
+        if result['success']:
+            context.user_data['phone_code_hash'] = result['phone_code_hash']
+            
+            await update.message.reply_text(
+                "✅ Код отправлен на ваш Telegram!\n\n"
+                "Введите код подтверждения:\n"
+                "Пример: `12345`\n\n"
+                "Или /cancel для отмены",
+                parse_mode='Markdown'
+            )
+            return CODE
+        else:
+            await update.message.reply_text(
+                f"❌ Ошибка: {result.get('error', 'Неизвестная ошибка')}\n\n"
+                "Попробуйте снова или /cancel",
+                parse_mode='Markdown'
+            )
+            return PHONE
+            
+    except Exception as e:
+        logger.error(f"Error sending code: {e}")
+        await update.message.reply_text(
+            "❌ Произошла ошибка при отправке кода\n\n"
+            "Попробуйте позже или /cancel",
+            parse_mode='Markdown'
+        )
+        return ConversationHandler.END
+
+
+async def code_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка кода подтверждения"""
+    user_id = update.effective_user.id
+    code = update.message.text.strip().replace('-', '').replace(' ', '')
+    
+    if not code.isdigit():
+        await update.message.reply_text(
+            "❌ Код должен содержать только цифры!\n\n"
+            "Введите код еще раз:",
+            parse_mode='Markdown'
+        )
+        return CODE
+    
+    phone = context.user_data.get('phone')
+    phone_code_hash = context.user_data.get('phone_code_hash')
+    
+    try:
+        await update.message.reply_text("⏳ Проверяю код...")
+        
+        # Пробуем авторизоваться
+        result = await userbot_manager.sign_in(user_id, phone, code, phone_code_hash)
+        
+        if result['success']:
+            # Успешно подключено
+            await update.message.reply_text(
+                "✅ Аккаунт успешно подключен!\n\n"
+                f"📱 {phone}\n\n"
+                "Теперь вы можете создавать рассылки.",
+                reply_markup=get_accounts_menu()
+            )
+            
+            # Логируем
+            db.add_log(user_id, 'account_connected', f'Phone: {phone}')
+            
+            return ConversationHandler.END
+            
+        elif result.get('password_required'):
+            # Нужен пароль 2FA
+            await update.message.reply_text(
+                "🔐 Аккаунт защищен двухфакторной аутентификацией\n\n"
+                "Введите пароль облачной защиты:\n\n"
+                "Или /cancel для отмены",
+                parse_mode='Markdown'
+            )
+            return PASSWORD
+            
+        else:
+            await update.message.reply_text(
+                f"❌ Ошибка: {result.get('error', 'Неверный код')}\n\n"
+                "Попробуйте еще раз или /cancel",
+                parse_mode='Markdown'
+            )
+            return CODE
+            
+    except Exception as e:
+        logger.error(f"Error verifying code: {e}")
+        await update.message.reply_text(
+            "❌ Произошла ошибка\n\n"
+            "Попробуйте позже или /cancel",
+            parse_mode='Markdown'
+        )
+        return ConversationHandler.END
+
+
+async def password_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка пароля 2FA"""
+    user_id = update.effective_user.id
+    password = update.message.text.strip()
+    
+    phone = context.user_data.get('phone')
+    
+    try:
+        await update.message.reply_text("⏳ Проверяю пароль...")
+        
+        result = await userbot_manager.check_password(user_id, password)
+        
+        if result['success']:
+            await update.message.reply_text(
+                "✅ Аккаунт успешно подключен!\n\n"
+                f"📱 {phone}\n\n"
+                "Теперь вы можете создавать рассылки.",
+                reply_markup=get_accounts_menu()
+            )
+            
+            db.add_log(user_id, 'account_connected', f'Phone: {phone} (with 2FA)')
+            
+            return ConversationHandler.END
+        else:
+            await update.message.reply_text(
+                "❌ Неверный пароль!\n\n"
+                "Попробуйте еще раз или /cancel",
+                parse_mode='Markdown'
+            )
+            return PASSWORD
+            
+    except Exception as e:
+        logger.error(f"Error checking password: {e}")
+        await update.message.reply_text(
+            "❌ Произошла ошибка\n\n"
+            "Попробуйте позже или /cancel",
+            parse_mode='Markdown'
+        )
+        return ConversationHandler.END
+
+
+async def cancel_connect(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Отмена подключения аккаунта"""
+    await update.message.reply_text(
+        "❌ Подключение отменено",
+        reply_markup=get_accounts_menu()
+    )
+    return ConversationHandler.END
+
+
 # ==================== ГЛАВНАЯ ФУНКЦИЯ ====================
 
 def main():
@@ -1761,4 +1969,5 @@ if __name__ == '__main__':
             backup_manager.shutdown()
         
         db.close()
+        logger.info("✅ Cleanup completed")
         logger.info("✅ Cleanup completed")
