@@ -12,15 +12,18 @@ from config import SUBSCRIPTION_PLANS, PAYMENT_METHODS
 def get_main_menu(is_admin=False):
     """Главное меню"""
     keyboard = [
-        [KeyboardButton("📱 Мои аккаунты"), KeyboardButton("📨 Создать рассылку")],
-        [KeyboardButton("⏰ Планировщик"), KeyboardButton("📜 История")],
-        [KeyboardButton("💎 Тарифы"), KeyboardButton("ℹ️ Помощь")]
+        [InlineKeyboardButton("📱 Мои аккаунты", callback_data="my_accounts")],
+        [InlineKeyboardButton("📨 Создать рассылку", callback_data="create_mailing")],
+        [InlineKeyboardButton("⏰ Планировщик", callback_data="scheduler")],
+        [InlineKeyboardButton("📜 История", callback_data="history")],
+        [InlineKeyboardButton("💎 Тарифы", callback_data="subscriptions")],
+        [InlineKeyboardButton("ℹ️ Помощь", callback_data="help")]
     ]
     
     if is_admin:
-        keyboard.append([KeyboardButton("👨‍💼 Админ-панель")])
+        keyboard.append([InlineKeyboardButton("👨‍💼 Админ-панель", callback_data="admin_panel")])
     
-    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    return InlineKeyboardMarkup(keyboard)
 
 
 def get_back_button():
