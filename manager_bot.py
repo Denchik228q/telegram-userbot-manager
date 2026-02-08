@@ -1841,6 +1841,405 @@ async def cancel_connect(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 
+# ==================== CALLBACK ОБРАБОТЧИКИ ====================
+
+async def my_accounts_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показать мои аккаунты"""
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = query.from_user.id
+    accounts = db.get_user_accounts(user_id)
+    
+    if not accounts:
+        text = "❌ У вас нет подключенных аккаунтов\n\nПодключите аккаунт для начала работы."
+    else:
+        text = f"📱 *Ваши аккаунты ({len(accounts)}):*\n\n"
+        for acc in accounts:
+            status = "✅" if acc['is_active'] else "❌"
+            name = acc.get('account_name') or acc['phone']
+            text += f"{status} {name} ({acc['phone']})\n"
+    
+    await query.edit_message_text(text, parse_mode='Markdown', reply_markup=get_accounts_menu())
+
+
+async def accounts_back_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Возврат к списку аккаунтов"""
+    query = update.callback_query
+    await query.answer()
+    await my_accounts_callback(update, context)
+
+
+async def manage_accounts_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Управление аккаунтами"""
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = query.from_user.id
+    accounts = db.get_user_accounts(user_id)
+    
+    if not accounts:
+        await query.edit_message_text(
+            "❌ Нет аккаунтов для управления",
+            reply_markup=get_accounts_menu()
+        )
+        return
+    
+    keyboard = []
+    for acc in accounts:
+        name = acc.get('account_name') or acc['phone']
+        status = "✅" if acc['is_active'] else "❌"
+        keyboard.append([InlineKeyboardButton(
+            f"{status} {name}",
+            callback_data=f"disconnect_account_{acc['id']}"
+        )])
+    
+    keyboard.append([InlineKeyboardButton("◀️ Назад", callback_data="my_accounts")])
+    
+    await query.edit_message_text(
+        "📱 *Управление аккаунтами*\n\nВыберите аккаунт для отключения:",
+        parse_mode='Markdown',
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+
+async def disconnect_account_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Отключить аккаунт"""
+    query = update.callback_query
+    await query.answer()
+    
+    account_id = int(query.data.split('_')[-1])
+    user_id = query.from_user.id
+    
+    # Отключаем аккаунт
+    result = await userbot_manager.disconnect_account(user_id, account_id)
+    
+    if result:
+        await query.edit_message_text(
+            "✅ Аккаунт успешно отключен",
+            reply_markup=get_accounts_menu()
+        )
+        db.add_log(user_id, 'account_disconnected', f'Account ID: {account_id}')
+    else:
+        await query.edit_message_text(
+            "❌ Ошибка при отключении аккаунта",
+            reply_markup=get_accounts_menu()
+        )
+
+
+async def create_mailing_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Создать рассылку"""
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = query.from_user.id
+    accounts = db.get_user_accounts(user_id)
+    
+    if not accounts:
+        await query.edit_message_text(
+            TEXTS['no_accounts'],
+            parse_mode='Markdown',
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("📱 Подключить аккаунт", callback_data="connect_account"),
+                InlineKeyboardButton("◀️ Назад", callback_data="main_menu")
+            ]])
+        )
+        return
+    
+    await query.edit_message_text(
+        "📨 *Создание рассылки*\n\n"
+        "Отправьте список получателей (username или ID):\n"
+        "Пример:\n`@username1\n@username2\n123456789`\n\n"
+        "Или /cancel для отмены",
+        parse_mode='Markdown'
+    )
+
+
+async def scheduler_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Планировщик"""
+    query = update.callback_query
+    await query.answer()
+    
+    await query.edit_message_text(
+        "⏰ *Планировщик рассылок*\n\n"
+        "Функция в разработке",
+        parse_mode='Markdown',
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("◀️ Назад", callback_data="main_menu")
+        ]])
+    )
+
+
+async def history_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """История рассылок"""
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = query.from_user.id
+    mailings = db.get_user_mailings(user_id, limit=10)
+    
+    if not mailings:
+        text = "📜 История рассылок пуста"
+    else:
+        text = "📜 *Последние рассылки:*\n\n"
+        for m in mailings:
+            status_emoji = {
+                'pending': '⏳',
+                'running': '▶️',
+                'completed': '✅',
+                'cancelled': '❌',
+                'failed': '⚠️'
+            }.get(m['status'], '❓')
+            
+            text += f"{status_emoji} ID {m['id']}: {m['sent_count']}/{m['total_count']}\n"
+    
+    await query.edit_message_text(
+        text,
+        parse_mode='Markdown',
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("◀️ Назад", callback_data="main_menu")
+        ]])
+    )
+
+
+async def subscriptions_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показать тарифы"""
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = query.from_user.id
+    user_data = db.get_user(user_id)
+    current_plan = user_data.get('subscription_plan', 'trial')
+    
+    text = "💎 *Тарифные планы:*\n\n"
+    
+    keyboard = []
+    for plan_id, plan in SUBSCRIPTION_PLANS.items():
+        is_current = (plan_id == current_plan)
+        status = " ✅ Текущий" if is_current else ""
+        
+        text += f"*{plan['name']}*{status}\n"
+        text += f"💰 {plan['price']} ₽/мес\n"
+        text += f"📝 {plan['description']}\n\n"
+        
+        if not is_current:
+            keyboard.append([InlineKeyboardButton(
+                f"Купить {plan['name']} - {plan['price']} ₽",
+                callback_data=f"buy_{plan_id}"
+            )])
+    
+    keyboard.append([InlineKeyboardButton("◀️ Назад", callback_data="main_menu")])
+    
+    await query.edit_message_text(
+        text,
+        parse_mode='Markdown',
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+
+async def buy_subscription_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Покупка подписки"""
+    query = update.callback_query
+    await query.answer()
+    
+    plan_id = query.data.split('_')[1]
+    plan = SUBSCRIPTION_PLANS.get(plan_id)
+    
+    if not plan:
+        await query.edit_message_text("❌ Тариф не найден")
+        return
+    
+    text = f"💎 *{plan['name']}*\n\n"
+    text += f"💰 Стоимость: {plan['price']} ₽\n"
+    text += f"📅 Период: {plan['days']} дней\n\n"
+    text += "Выберите способ оплаты:"
+    
+    keyboard = []
+    for method_id, method in PAYMENT_METHODS.items():
+        if method['enabled']:
+            keyboard.append([InlineKeyboardButton(
+                method['name'],
+                callback_data=f"payment_{method_id}_{plan_id}"
+            )])
+    
+    keyboard.append([InlineKeyboardButton("◀️ Назад", callback_data="subscriptions")])
+    
+    await query.edit_message_text(
+        text,
+        parse_mode='Markdown',
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+
+async def payment_method_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Выбор способа оплаты"""
+    query = update.callback_query
+    await query.answer()
+    
+    parts = query.data.split('_')
+    method = parts[1]
+    plan_id = parts[2]
+    
+    plan = SUBSCRIPTION_PLANS[plan_id]
+    
+    if method == 'manual':
+        text = f"📱 *Ручной перевод*\n\n"
+        text += f"Сумма: *{plan['price']} ₽*\n\n"
+        text += "Реквизиты для оплаты:\n"
+        text += "💳 Карта: `1234 5678 9012 3456`\n"
+        text += "👤 Получатель: Иван Иванов\n\n"
+        text += "После оплаты отправьте чек администратору: @admin"
+    elif method == 'card':
+        text = "💳 Оплата банковской картой временно недоступна"
+    else:
+        text = "❌ Неизвестный метод оплаты"
+    
+    await query.edit_message_text(
+        text,
+        parse_mode='Markdown',
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("◀️ Назад", callback_data=f"buy_{plan_id}")
+        ]])
+    )
+
+
+async def help_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Помощь"""
+    query = update.callback_query
+    await query.answer()
+    
+    await query.edit_message_text(
+        TEXTS['help'],
+        parse_mode='Markdown',
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("◀️ Назад", callback_data="main_menu")
+        ]])
+    )
+
+
+async def main_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Возврат в главное меню"""
+    query = update.callback_query
+    await query.answer()
+    
+    user = query.from_user
+    is_admin = (user.id == ADMIN_ID)
+    
+    user_data = db.get_user(user.id)
+    plan_id = user_data.get('subscription_plan', 'trial')
+    plan = SUBSCRIPTION_PLANS[plan_id]
+    days_left = get_days_left(user_data)
+    
+    text = TEXTS['welcome'].format(
+        subscription=plan['name'],
+        days_left=days_left
+    )
+    
+    await query.edit_message_text(
+        text,
+        parse_mode='Markdown',
+        reply_markup=get_main_menu(is_admin)
+    )
+
+
+async def subscriptions_back_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Назад к тарифам"""
+    await subscriptions_callback(update, context)
+
+
+async def history_back_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Назад к истории"""
+    await history_callback(update, context)
+
+
+async def scheduler_back_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Назад к планировщику"""
+    await scheduler_callback(update, context)
+
+
+# Заглушки для остальных функций (добавьте по необходимости)
+async def view_mailing_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer("Функция в разработке")
+
+
+async def cancel_mailing_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer("Функция в разработке")
+
+
+async def create_schedule_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer("Функция в разработке")
+
+
+async def view_schedules_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer("Функция в разработке")
+
+
+async def edit_schedule_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer("Функция в разработке")
+
+
+async def delete_schedule_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer("Функция в разработке")
+
+
+async def toggle_schedule_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer("Функция в разработке")
+
+
+async def admin_panel_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer("Админ-панель в разработке")
+
+
+async def admin_users_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer("Функция в разработке")
+
+
+async def admin_payments_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer("Функция в разработке")
+
+
+async def admin_stats_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer("Функция в разработке")
+
+
+async def admin_backup_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer("Создание бэкапа...")
+    if backup_manager:
+        await backup_manager.manual_backup()
+
+
+async def admin_broadcast_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer("Функция в разработке")
+
+
+async def admin_back_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer("Функция в разработке")
+
+
+async def approve_payment_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer("Функция в разработке")
+
+
+async def reject_payment_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer("Функция в разработке")
+
+
 # ==================== ГЛАВНАЯ ФУНКЦИЯ ====================
 
 def main():
