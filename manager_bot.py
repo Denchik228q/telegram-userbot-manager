@@ -134,7 +134,7 @@ async def connect_userbot_start(update: Update, context: ContextTypes.DEFAULT_TY
     if not check_subscription(user_data):
         await update.message.reply_text(
             "❌ Ваша подписка истекла. Пожалуйста, продлите подписку для подключения аккаунтов.",
-            reply_markup=get_tariffs_menu()
+            reply_markup=get_subscription_menu()
         )
         return ConversationHandler.END
     
@@ -146,7 +146,7 @@ async def connect_userbot_start(update: Update, context: ContextTypes.DEFAULT_TY
         await update.message.reply_text(
             f"⚠️ Вы достигли лимита аккаунтов ({limit}).\n\n"
             "Для подключения большего количества аккаунтов перейдите на более высокий тариф.",
-            reply_markup=get_tariffs_menu()
+            reply_markup=get_subscription_menu()
         )
         return ConversationHandler.END
     
@@ -427,7 +427,7 @@ async def create_mailing_start(update: Update, context: ContextTypes.DEFAULT_TYP
     if not check_subscription(user_data):
         await update.message.reply_text(
             "❌ Ваша подписка истекла. Пожалуйста, продлите подписку.",
-            reply_markup=get_tariffs_menu()
+            reply_markup=get_subscription_menu()
         )
         return ConversationHandler.END
     
@@ -449,7 +449,7 @@ async def create_mailing_start(update: Update, context: ContextTypes.DEFAULT_TYP
         await update.message.reply_text(
             f"⚠️ Вы достигли дневного лимита рассылок ({limit}).\n\n"
             "Для увеличения лимитов перейдите на более высокий тариф.",
-            reply_markup=get_tariffs_menu()
+            reply_markup=get_subscription_menu()
         )
         return ConversationHandler.END
     
@@ -490,7 +490,7 @@ async def mailing_targets_received(update: Update, context: ContextTypes.DEFAULT
             f"⚠️ Слишком много целей ({len(targets)}).\n"
             f"Ваш лимит: {limit} целей на рассылку.\n\n"
             "Для увеличения лимитов перейдите на более высокий тариф.",
-            reply_markup=get_tariffs_menu()
+            reply_markup=get_subscription_menu()
         )
         return MAILING_TARGETS
     
@@ -827,7 +827,7 @@ async def scheduler_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not check_subscription(user_data):
         await update.message.reply_text(
             "❌ Ваша подписка истекла. Планировщик доступен только для подписчиков.",
-            reply_markup=get_tariffs_menu()
+            reply_markup=get_subscription_menu()
         )
         return
     
@@ -966,7 +966,7 @@ async def tariffs_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "💎 *Доступные тарифы*\n\n"
         "Выберите подходящий тариф:",
         parse_mode='Markdown',
-        reply_markup=get_tariffs_menu()
+        reply_markup=get_subscription_menu()
     )
 
 
@@ -979,7 +979,7 @@ async def view_tariffs_callback(update: Update, context: ContextTypes.DEFAULT_TY
         "💎 *Доступные тарифы*\n\n"
         "Выберите подходящий тариф:",
         parse_mode='Markdown',
-        reply_markup=get_tariffs_menu()
+        reply_markup=get_subscription_menu()
     )
 
 

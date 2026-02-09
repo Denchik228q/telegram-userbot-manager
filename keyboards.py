@@ -46,3 +46,15 @@ def get_payment_methods_menu(plan_id):
 
 def get_back_button(callback_data="main_menu"):
     return InlineKeyboardMarkup([[InlineKeyboardButton("◀️ Назад", callback_data=callback_data)]])
+
+def get_admin_menu():
+    """Меню админ-панели"""
+    keyboard = [
+        [InlineKeyboardButton("👥 Пользователи", callback_data="admin_users")],
+        [InlineKeyboardButton("💰 Платежи", callback_data="admin_payments")],
+        [InlineKeyboardButton("📊 Статистика", callback_data="admin_stats")],
+        [InlineKeyboardButton("💾 Бэкап БД", callback_data="admin_backup")],
+        [InlineKeyboardButton("📢 Рассылка всем", callback_data="admin_broadcast")],
+        [InlineKeyboardButton("◀️ Назад", callback_data="main_menu")]
+    ]
+    return InlineKeyboardMarkup(keyboard)
