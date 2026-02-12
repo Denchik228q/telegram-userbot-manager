@@ -1522,14 +1522,24 @@ def main():
     global scheduler
     scheduler = MailingScheduler(db, userbot_manager, application.bot)
     
-    # Автобэкап каждые 24 часа
-    async def auto_backup():
-        while True:
-            await asyncio.sleep(24 * 60 * 60)  # 24 часа
-            logger.info("🔄 Creating automatic backup...")
-            backup_manager.create_backup()
+    # Функция для запуска async задач после старта бота
+    async def post_init(application):
+        """Запускается после инициализации бота"""
+        # Запускаем проверку расписаний
+        scheduler.start_checking()
+        
+        # Запускаем автобэкап
+        async def auto_backup():
+            while True:
+                await asyncio.sleep(24 * 60 * 60)  # 24 часа
+                logger.info("🔄 Creating automatic backup...")
+                backup_manager.create_backup()
+        
+        asyncio.create_task(auto_backup())
+        logger.info("✅ Background tasks started")
     
-    asyncio.create_task(auto_backup())
+    # Добавляем post_init callback
+    application.post_init = post_init
     
     # ==================== КОМАНДЫ ====================
     application.add_handler(CommandHandler("start", start))

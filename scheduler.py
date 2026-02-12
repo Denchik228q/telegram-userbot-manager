@@ -17,10 +17,14 @@ class MailingScheduler:
         self.bot = bot
         self.scheduler = AsyncIOScheduler()
         self.scheduler.start()
+        self._check_task = None
         logger.info("✅ Scheduler started")
-        
-        # Запускаем проверку активных расписаний
-        asyncio.create_task(self.check_schedules())
+    
+    def start_checking(self):
+        """Запустить проверку расписаний (вызывать после запуска event loop)"""
+        if self._check_task is None:
+            self._check_task = asyncio.create_task(self.check_schedules())
+            logger.info("✅ Schedule checking started")
     
     async def check_schedules(self):
         """Проверка и запуск активных расписаний"""
@@ -60,7 +64,10 @@ class MailingScheduler:
         
         # Преобразуем строку в datetime если нужно
         if isinstance(next_run, str):
-            next_run = datetime.fromisoformat(next_run)
+            try:
+                next_run = datetime.fromisoformat(next_run)
+            except:
+                return True
         
         return datetime.now() >= next_run
     
@@ -100,12 +107,16 @@ class MailingScheduler:
             )
             
             # Уведомляем пользователя
-            await self.bot.send_message(
-                user_id,
-                f"🚀 **Запущена запланированная рассылка**\n\n"
-                f"Расписание: {schedule['name']}\n"
-                f"ID рассылки: `{mailing_id}`"
-            )
+            try:
+                await self.bot.send_message(
+                    user_id,
+                    f"🚀 **Запущена запланированная рассылка**\n\n"
+                    f"Расписание: {schedule['name']}\n"
+                    f"ID рассылки: `{mailing_id}`",
+                    parse_mode='Markdown'
+                )
+            except Exception as e:
+                logger.error(f"Error notifying user {user_id}: {e}")
             
             logger.info(f"✅ Scheduled mailing {mailing_id} started for user {user_id}")
             
@@ -114,5 +125,7 @@ class MailingScheduler:
     
     def shutdown(self):
         """Остановить планировщик"""
+        if self._check_task:
+            self._check_task.cancel()
         self.scheduler.shutdown()
         logger.info("✅ Scheduler stopped")
