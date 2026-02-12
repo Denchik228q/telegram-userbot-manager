@@ -23,6 +23,10 @@ wheels/
 .installed.cfg
 *.egg
 
+# Environment
+.env
+.env.local
+
 # Database
 *.db
 *.sqlite
@@ -31,20 +35,12 @@ wheels/
 # Sessions
 sessions/
 *.session
-*.session-journal
-
-# Media
-media/
 
 # Backups
 backups/
-backup_*.db
-
-# Environment
-.env
-.env.local
 
 # Logs
+logs/
 *.log
 
 # IDE
@@ -57,3 +53,6 @@ backup_*.db
 # OS
 .DS_Store
 Thumbs.db
+
+# Railway
+.railway/

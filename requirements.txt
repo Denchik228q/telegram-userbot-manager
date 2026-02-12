@@ -1,25 +1,6 @@
-# Telegram Bot
 python-telegram-bot==20.7
-
-# Userbot (Telethon)
 telethon==1.34.0
-
-# Environment variables
 python-dotenv==1.0.0
-
-# Payment processing
-yookassa==2.3.0
-
-# Cryptography (for Telethon speed)
-cryptg==0.4.0
-
-# Task scheduler
-apscheduler==3.10.4
-
-# Async SQLite (for database)
 aiosqlite==0.19.0
-
-# Additional dependencies (auto-installed, but just in case)
-pyaes>=1.6.1
-pyasn1>=0.4.8
-rsa>=4.9
+apscheduler==3.10.4
+cryptg==0.4.0
