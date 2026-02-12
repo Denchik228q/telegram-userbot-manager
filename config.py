@@ -199,3 +199,8 @@ ERROR_MESSAGE = """
 """
 
 SUCCESS_MESSAGE = "✅ {message}"
+
+# ==================== DATABASE SETTINGS ====================
+SQLITE_TIMEOUT = 30.0  # Таймаут для блокировки БД (секунды)
+SQLITE_BUSY_TIMEOUT = 30000  # Busy timeout (миллисекунды)
+SQLITE_JOURNAL_MODE = 'WAL'  # Write-Ahead Logging

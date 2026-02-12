@@ -1,33 +1,52 @@
 ﻿"""
-Управление базой данных
+Управление базой данных SQLite с WAL режимом
 """
 import sqlite3
 import logging
 from datetime import datetime, timedelta
 from contextlib import contextmanager
 from config import DATABASE_URL
+import threading
 
 logger = logging.getLogger(__name__)
 
 class Database:
-    def __init__(self, db_path=DATABASE_URL):
-        self.db_path = db_path
+    def __init__(self):
+        self.db_path = DATABASE_URL
+        self._local = threading.local()
         self.init_database()
+        logger.info("✅ Database initialized successfully")
+    
+    def _get_connection(self):
+        """Получить connection для текущего потока"""
+        if not hasattr(self._local, 'connection') or self._local.connection is None:
+            self._local.connection = sqlite3.connect(
+                self.db_path,
+                timeout=30.0,  # Увеличенный таймаут
+                check_same_thread=False
+            )
+            self._local.connection.row_factory = sqlite3.Row
+            # Включаем WAL режим
+            self._local.connection.execute('PRAGMA journal_mode=WAL')
+            self._local.connection.execute('PRAGMA busy_timeout=30000')
+            self._local.connection.execute('PRAGMA synchronous=NORMAL')
+        return self._local.connection
     
     @contextmanager
     def get_connection(self):
-        """Контекстный менеджер для работы с БД"""
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
+        """Context manager для работы с БД"""
+        conn = self._get_connection()
         try:
             yield conn
             conn.commit()
-        except Exception as e:
+        except sqlite3.OperationalError as e:
             conn.rollback()
             logger.error(f"Database error: {e}")
             raise
-        finally:
-            conn.close()
+        except Exception as e:
+            conn.rollback()
+            logger.error(f"Unexpected database error: {e}")
+            raise
     
     def init_database(self):
         """Инициализация базы данных"""
@@ -37,15 +56,14 @@ class Database:
             # Таблица пользователей
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS users (
-                    id INTEGER PRIMARY KEY,
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
                     telegram_id INTEGER UNIQUE NOT NULL,
                     username TEXT,
                     first_name TEXT,
                     last_name TEXT,
                     subscription_plan TEXT DEFAULT 'trial',
                     subscription_expires TIMESTAMP,
-                    is_active BOOLEAN DEFAULT 1,
-                    is_banned BOOLEAN DEFAULT 0,
+                    is_banned INTEGER DEFAULT 0,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     last_active TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
@@ -59,11 +77,11 @@ class Database:
                     phone TEXT NOT NULL,
                     name TEXT,
                     username TEXT,
-                    session_string TEXT,
-                    is_active BOOLEAN DEFAULT 1,
+                    session_string TEXT NOT NULL,
+                    is_active INTEGER DEFAULT 1,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     last_used TIMESTAMP,
-                    FOREIGN KEY (user_id) REFERENCES users(id),
+                    FOREIGN KEY (user_id) REFERENCES users(telegram_id),
                     UNIQUE(user_id, phone)
                 )
             ''')
@@ -73,7 +91,7 @@ class Database:
                 CREATE TABLE IF NOT EXISTS mailings (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     user_id INTEGER NOT NULL,
-                    message_text TEXT,
+                    message_text TEXT NOT NULL,
                     message_type TEXT DEFAULT 'text',
                     media_path TEXT,
                     targets TEXT NOT NULL,
@@ -82,10 +100,10 @@ class Database:
                     total INTEGER DEFAULT 0,
                     sent INTEGER DEFAULT 0,
                     errors INTEGER DEFAULT 0,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     started_at TIMESTAMP,
                     completed_at TIMESTAMP,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (user_id) REFERENCES users(id)
+                    FOREIGN KEY (user_id) REFERENCES users(telegram_id)
                 )
             ''')
             
@@ -94,15 +112,15 @@ class Database:
                 CREATE TABLE IF NOT EXISTS schedules (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     user_id INTEGER NOT NULL,
-                    name TEXT,
+                    name TEXT NOT NULL,
                     mailing_config TEXT NOT NULL,
                     schedule_type TEXT NOT NULL,
                     schedule_time TEXT NOT NULL,
-                    is_active BOOLEAN DEFAULT 1,
+                    is_active INTEGER DEFAULT 1,
                     last_run TIMESTAMP,
                     next_run TIMESTAMP,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (user_id) REFERENCES users(id)
+                    FOREIGN KEY (user_id) REFERENCES users(telegram_id)
                 )
             ''')
             
@@ -114,12 +132,12 @@ class Database:
                     plan TEXT NOT NULL,
                     amount REAL NOT NULL,
                     payment_method TEXT NOT NULL,
-                    status TEXT DEFAULT 'pending',
                     transaction_id TEXT,
+                    status TEXT DEFAULT 'pending',
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     approved_at TIMESTAMP,
                     approved_by INTEGER,
-                    FOREIGN KEY (user_id) REFERENCES users(id)
+                    FOREIGN KEY (user_id) REFERENCES users(telegram_id)
                 )
             ''')
             
@@ -131,7 +149,7 @@ class Database:
                     action TEXT NOT NULL,
                     details TEXT,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (user_id) REFERENCES users(id)
+                    FOREIGN KEY (user_id) REFERENCES users(telegram_id)
                 )
             ''')
             
@@ -142,46 +160,46 @@ class Database:
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_mailings_status ON mailings(status)')
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_payments_user_id ON payments(user_id)')
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_payments_status ON payments(status)')
-            
-            logger.info("✅ Database initialized successfully")
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_logs_user_id ON logs(user_id)')
     
     # ==================== USERS ====================
     
     def create_user(self, telegram_id, username=None, first_name=None, last_name=None):
-        """Создать пользователя"""
+        """Создать или обновить пользователя"""
         with self.get_connection() as conn:
             cursor = conn.cursor()
             
             # Проверяем существует ли пользователь
             cursor.execute('SELECT id FROM users WHERE telegram_id = ?', (telegram_id,))
-            existing = cursor.fetchone()
+            exists = cursor.fetchone()
             
-            if existing:
-                # Обновляем last_active
+            if exists:
+                # Обновляем информацию
                 cursor.execute('''
                     UPDATE users 
-                    SET last_active = CURRENT_TIMESTAMP,
-                        username = ?,
-                        first_name = ?,
-                        last_name = ?
+                    SET username = ?, first_name = ?, last_name = ?, last_active = CURRENT_TIMESTAMP
                     WHERE telegram_id = ?
                 ''', (username, first_name, last_name, telegram_id))
-                return existing['id']
-            
-            # Создаём нового пользователя с trial подпиской
-            expires = datetime.now() + timedelta(days=7)
-            cursor.execute('''
-                INSERT INTO users (telegram_id, username, first_name, last_name, subscription_expires)
-                VALUES (?, ?, ?, ?, ?)
-            ''', (telegram_id, username, first_name, last_name, expires))
-            
-            user_id = cursor.lastrowid
-            
-            # Логируем регистрацию
-            self.add_log(user_id, 'user_registered', f'New user registered: {username or telegram_id}')
-            
-            logger.info(f"✅ New user created: {telegram_id}")
-            return user_id
+                return telegram_id
+            else:
+                # Создаём нового пользователя с trial подпиской на 7 дней
+                expires = datetime.now() + timedelta(days=7)
+                cursor.execute('''
+                    INSERT INTO users (telegram_id, username, first_name, last_name, subscription_plan, subscription_expires)
+                    VALUES (?, ?, ?, ?, 'trial', ?)
+                ''', (telegram_id, username, first_name, last_name, expires))
+                
+                # Логируем БЕЗ вызова add_log (избегаем рекурсии)
+                try:
+                    cursor.execute('''
+                        INSERT INTO logs (user_id, action, details)
+                        VALUES (?, 'user_registered', ?)
+                    ''', (telegram_id, f'New user: {username or telegram_id}'))
+                except:
+                    pass  # Игнорируем ошибки логирования
+                
+                logger.info(f"✅ New user created: {telegram_id}")
+                return telegram_id
     
     def get_user(self, telegram_id):
         """Получить пользователя"""
@@ -191,39 +209,50 @@ class Database:
             row = cursor.fetchone()
             return dict(row) if row else None
     
-    def update_user_subscription(self, user_id, plan, days=30):
-        """Обновить подписку пользователя"""
-        with self.get_connection() as conn:
-            cursor = conn.cursor()
-            expires = datetime.now() + timedelta(days=days)
-            cursor.execute('''
-                UPDATE users
-                SET subscription_plan = ?,
-                    subscription_expires = ?
-                WHERE id = ?
-            ''', (plan, expires, user_id))
-            
-            self.add_log(user_id, 'subscription_updated', f'Plan: {plan}, Days: {days}')
-            logger.info(f"✅ Subscription updated for user {user_id}: {plan}")
-    
     def get_all_users(self, active_only=False):
         """Получить всех пользователей"""
         with self.get_connection() as conn:
             cursor = conn.cursor()
             query = 'SELECT * FROM users'
             if active_only:
-                query += ' WHERE is_active = 1 AND is_banned = 0'
-            query += ' ORDER BY created_at DESC'
+                query += ' WHERE is_banned = 0'
             cursor.execute(query)
             return [dict(row) for row in cursor.fetchall()]
     
-    def ban_user(self, user_id, banned=True):
-        """Заблокировать/разблокировать пользователя"""
+    def update_user_subscription(self, telegram_id, plan, days):
+        """Обновить подписку пользователя"""
         with self.get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute('UPDATE users SET is_banned = ? WHERE id = ?', (banned, user_id))
-            action = 'banned' if banned else 'unbanned'
-            self.add_log(user_id, f'user_{action}', f'User was {action}')
+            expires = datetime.now() + timedelta(days=days)
+            cursor.execute('''
+                UPDATE users 
+                SET subscription_plan = ?, subscription_expires = ?
+                WHERE telegram_id = ?
+            ''', (plan, expires, telegram_id))
+            
+            try:
+                cursor.execute('''
+                    INSERT INTO logs (user_id, action, details)
+                    VALUES (?, 'subscription_updated', ?)
+                ''', (telegram_id, f'Plan: {plan}, Days: {days}'))
+            except:
+                pass
+            
+            logger.info(f"✅ Subscription updated for user {telegram_id}: {plan}")
+    
+    def ban_user(self, telegram_id):
+        """Забанить пользователя"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('UPDATE users SET is_banned = 1 WHERE telegram_id = ?', (telegram_id,))
+            logger.info(f"🚫 User {telegram_id} banned")
+    
+    def unban_user(self, telegram_id):
+        """Разбанить пользователя"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('UPDATE users SET is_banned = 0 WHERE telegram_id = ?', (telegram_id,))
+            logger.info(f"✅ User {telegram_id} unbanned")
     
     # ==================== ACCOUNTS ====================
     
@@ -238,11 +267,19 @@ class Database:
                 ''', (user_id, phone, name, username, session_string))
                 
                 account_id = cursor.lastrowid
-                self.add_log(user_id, 'account_added', f'Phone: {phone}')
-                logger.info(f"✅ Account added for user {user_id}: {phone}")
+                
+                try:
+                    cursor.execute('''
+                        INSERT INTO logs (user_id, action, details)
+                        VALUES (?, 'account_added', ?)
+                    ''', (user_id, f'Phone: {phone}'))
+                except:
+                    pass
+                
+                logger.info(f"✅ Account {phone} added for user {user_id}")
                 return account_id
             except sqlite3.IntegrityError:
-                logger.warning(f"Account {phone} already exists for user {user_id}")
+                logger.warning(f"⚠️ Account {phone} already exists for user {user_id}")
                 return None
     
     def get_user_accounts(self, user_id, active_only=True):
@@ -252,7 +289,6 @@ class Database:
             query = 'SELECT * FROM accounts WHERE user_id = ?'
             if active_only:
                 query += ' AND is_active = 1'
-            query += ' ORDER BY created_at DESC'
             cursor.execute(query, (user_id,))
             return [dict(row) for row in cursor.fetchall()]
     
@@ -282,14 +318,21 @@ class Database:
                 values.append(account_id)
                 query = f"UPDATE accounts SET {', '.join(updates)} WHERE id = ?"
                 cursor.execute(query, values)
-                logger.info(f"✅ Account {account_id} updated")
     
     def delete_account(self, account_id, user_id):
         """Удалить аккаунт"""
         with self.get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute('DELETE FROM accounts WHERE id = ? AND user_id = ?', (account_id, user_id))
-            self.add_log(user_id, 'account_deleted', f'Account ID: {account_id}')
+            
+            try:
+                cursor.execute('''
+                    INSERT INTO logs (user_id, action, details)
+                    VALUES (?, 'account_deleted', ?)
+                ''', (user_id, f'Account ID: {account_id}'))
+            except:
+                pass
+            
             logger.info(f"✅ Account {account_id} deleted")
     
     def count_user_accounts(self, user_id):
@@ -316,7 +359,15 @@ class Database:
             ''', (user_id, message_text, message_type, media_path, targets_json, accounts_json, len(targets)))
             
             mailing_id = cursor.lastrowid
-            self.add_log(user_id, 'mailing_created', f'Mailing ID: {mailing_id}, Targets: {len(targets)}')
+            
+            try:
+                cursor.execute('''
+                    INSERT INTO logs (user_id, action, details)
+                    VALUES (?, 'mailing_created', ?)
+                ''', (user_id, f'Mailing ID: {mailing_id}, Targets: {len(targets)}'))
+            except:
+                pass
+            
             logger.info(f"✅ Mailing {mailing_id} created for user {user_id}")
             return mailing_id
     
@@ -401,7 +452,15 @@ class Database:
             ''', (user_id, name, config_json, schedule_type, schedule_time))
             
             schedule_id = cursor.lastrowid
-            self.add_log(user_id, 'schedule_created', f'Schedule ID: {schedule_id}')
+            
+            try:
+                cursor.execute('''
+                    INSERT INTO logs (user_id, action, details)
+                    VALUES (?, 'schedule_created', ?)
+                ''', (user_id, f'Schedule ID: {schedule_id}'))
+            except:
+                pass
+            
             logger.info(f"✅ Schedule {schedule_id} created for user {user_id}")
             return schedule_id
     
@@ -481,7 +540,15 @@ class Database:
         with self.get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute('DELETE FROM schedules WHERE id = ? AND user_id = ?', (schedule_id, user_id))
-            self.add_log(user_id, 'schedule_deleted', f'Schedule ID: {schedule_id}')
+            
+            try:
+                cursor.execute('''
+                    INSERT INTO logs (user_id, action, details)
+                    VALUES (?, 'schedule_deleted', ?)
+                ''', (user_id, f'Schedule ID: {schedule_id}'))
+            except:
+                pass
+            
             logger.info(f"✅ Schedule {schedule_id} deleted")
     
     # ==================== PAYMENTS ====================
@@ -496,7 +563,15 @@ class Database:
             ''', (user_id, plan, amount, payment_method, transaction_id))
             
             payment_id = cursor.lastrowid
-            self.add_log(user_id, 'payment_created', f'Plan: {plan}, Amount: {amount}')
+            
+            try:
+                cursor.execute('''
+                    INSERT INTO logs (user_id, action, details)
+                    VALUES (?, 'payment_created', ?)
+                ''', (user_id, f'Payment ID: {payment_id}, Plan: {plan}, Amount: {amount}'))
+            except:
+                pass
+            
             logger.info(f"✅ Payment {payment_id} created for user {user_id}")
             return payment_id
     
@@ -504,18 +579,23 @@ class Database:
         """Получить платёж по ID"""
         with self.get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute('SELECT * FROM payments WHERE id = ?', (payment_id,))
+            cursor.execute('''
+                SELECT p.*, u.username, u.first_name 
+                FROM payments p
+                LEFT JOIN users u ON p.user_id = u.telegram_id
+                WHERE p.id = ?
+            ''', (payment_id,))
             row = cursor.fetchone()
             return dict(row) if row else None
     
     def get_pending_payments(self):
-        """Получить все ожидающие платежи"""
+        """Получить ожидающие платежи"""
         with self.get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute('''
                 SELECT p.*, u.username, u.first_name 
                 FROM payments p
-                JOIN users u ON p.user_id = u.id
+                LEFT JOIN users u ON p.user_id = u.telegram_id
                 WHERE p.status = 'pending'
                 ORDER BY p.created_at DESC
             ''')
@@ -527,14 +607,13 @@ class Database:
             cursor = conn.cursor()
             
             # Получаем информацию о платеже
-            cursor.execute('SELECT user_id, plan FROM payments WHERE id = ?', (payment_id,))
+            cursor.execute('SELECT * FROM payments WHERE id = ?', (payment_id,))
             payment = cursor.fetchone()
             
-            if not payment:
+            if not payment or payment['status'] != 'pending':
                 return False
             
-            user_id = payment['user_id']
-            plan = payment['plan']
+            payment = dict(payment)
             
             # Обновляем статус платежа
             cursor.execute('''
@@ -545,10 +624,44 @@ class Database:
             
             # Обновляем подписку пользователя
             from config import SUBSCRIPTION_PLANS
-            days = SUBSCRIPTION_PLANS[plan]['days']
-            self.update_user_subscription(user_id, plan, days)
+            plan = payment['plan']
+            days = SUBSCRIPTION_PLANS.get(plan, {}).get('days', 30)
             
-            self.add_log(user_id, 'payment_approved', f'Payment ID: {payment_id}, Plan: {plan}')
+            # Получаем текущую дату окончания подписки
+            cursor.execute('SELECT subscription_expires FROM users WHERE telegram_id = ?', (payment['user_id'],))
+            user = cursor.fetchone()
+            current_expires = user['subscription_expires'] if user else None
+            
+            # Рассчитываем новую дату
+            if current_expires:
+                try:
+                    if isinstance(current_expires, str):
+                        current_expires = datetime.fromisoformat(current_expires)
+                    if current_expires > datetime.now():
+                        # Продлеваем от текущей даты окончания
+                        new_expires = current_expires + timedelta(days=days)
+                    else:
+                        # Подписка истекла, начинаем с текущего момента
+                        new_expires = datetime.now() + timedelta(days=days)
+                except:
+                    new_expires = datetime.now() + timedelta(days=days)
+            else:
+                new_expires = datetime.now() + timedelta(days=days)
+            
+            cursor.execute('''
+                UPDATE users 
+                SET subscription_plan = ?, subscription_expires = ?
+                WHERE telegram_id = ?
+            ''', (plan, new_expires, payment['user_id']))
+            
+            try:
+                cursor.execute('''
+                    INSERT INTO logs (user_id, action, details)
+                    VALUES (?, 'payment_approved', ?)
+                ''', (payment['user_id'], f'Payment ID: {payment_id}, Plan: {plan}'))
+            except:
+                pass
+            
             logger.info(f"✅ Payment {payment_id} approved by admin {admin_id}")
             return True
     
@@ -556,75 +669,54 @@ class Database:
         """Отклонить платёж"""
         with self.get_connection() as conn:
             cursor = conn.cursor()
-            
-            cursor.execute('SELECT user_id FROM payments WHERE id = ?', (payment_id,))
-            payment = cursor.fetchone()
-            
-            if not payment:
-                return False
-            
             cursor.execute('''
                 UPDATE payments 
-                SET status = 'rejected', approved_by = ?
-                WHERE id = ?
+                SET status = 'rejected', approved_at = CURRENT_TIMESTAMP, approved_by = ?
+                WHERE id = ? AND status = 'pending'
             ''', (admin_id, payment_id))
             
-            self.add_log(payment['user_id'], 'payment_rejected', f'Payment ID: {payment_id}')
-            logger.info(f"❌ Payment {payment_id} rejected by admin {admin_id}")
-            return True
-    
-    def get_user_payments(self, user_id):
-        """Получить платежи пользователя"""
-        with self.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('''
-                SELECT * FROM payments 
-                WHERE user_id = ? 
-                ORDER BY created_at DESC
-            ''', (user_id,))
-            return [dict(row) for row in cursor.fetchall()]
+            if cursor.rowcount > 0:
+                cursor.execute('SELECT user_id FROM payments WHERE id = ?', (payment_id,))
+                payment = cursor.fetchone()
+                if payment:
+                    try:
+                        cursor.execute('''
+                            INSERT INTO logs (user_id, action, details)
+                            VALUES (?, 'payment_rejected', ?)
+                        ''', (payment['user_id'], f'Payment ID: {payment_id}'))
+                    except:
+                        pass
+                
+                logger.info(f"❌ Payment {payment_id} rejected by admin {admin_id}")
+                return True
+            return False
     
     # ==================== LOGS ====================
     
     def add_log(self, user_id, action, details=None):
-        """Добавить лог"""
+        """Добавить лог (безопасно, без вложенных транзакций)"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    INSERT INTO logs (user_id, action, details)
+                    VALUES (?, ?, ?)
+                ''', (user_id, action, details))
+        except Exception as e:
+            # Не прерываем выполнение если лог не записался
+            logger.debug(f"Failed to write log: {e}")
+    
+    def get_user_logs(self, user_id, limit=50):
+        """Получить логи пользователя"""
         with self.get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute('''
-                INSERT INTO logs (user_id, action, details)
-                VALUES (?, ?, ?)
-            ''', (user_id, action, details))
-    
-    def get_logs(self, user_id=None, limit=100):
-        """Получить логи"""
-        with self.get_connection() as conn:
-            cursor = conn.cursor()
-            if user_id:
-                cursor.execute('''
-                    SELECT * FROM logs 
-                    WHERE user_id = ? 
-                    ORDER BY created_at DESC 
-                    LIMIT ?
-                ''', (user_id, limit))
-            else:
-                cursor.execute('''
-                    SELECT * FROM logs 
-                    ORDER BY created_at DESC 
-                    LIMIT ?
-                ''', (limit,))
+                SELECT * FROM logs 
+                WHERE user_id = ? 
+                ORDER BY created_at DESC 
+                LIMIT ?
+            ''', (user_id, limit))
             return [dict(row) for row in cursor.fetchall()]
-    
-    def cleanup_old_logs(self, days=7):
-        """Очистить старые логи"""
-        with self.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('''
-                DELETE FROM logs 
-                WHERE created_at < datetime('now', '-' || ? || ' days')
-            ''', (days,))
-            deleted = cursor.rowcount
-            logger.info(f"✅ Cleaned up {deleted} old logs")
-            return deleted
     
     # ==================== STATISTICS ====================
     
@@ -635,41 +727,60 @@ class Database:
             
             stats = {}
             
-            # Пользователи
+            # Всего пользователей
             cursor.execute('SELECT COUNT(*) as count FROM users')
             stats['total_users'] = cursor.fetchone()['count']
             
-            cursor.execute('SELECT COUNT(*) as count FROM users WHERE DATE(last_active) = DATE("now")')
+            # Активных сегодня
+            cursor.execute('''
+                SELECT COUNT(*) as count FROM users 
+                WHERE DATE(last_active) = DATE('now')
+            ''')
             stats['active_today'] = cursor.fetchone()['count']
             
-            cursor.execute('SELECT COUNT(*) as count FROM users WHERE DATE(created_at) >= DATE("now", "-7 days")')
+            # Новых за неделю
+            cursor.execute('''
+                SELECT COUNT(*) as count FROM users 
+                WHERE created_at >= datetime('now', '-7 days')
+            ''')
             stats['new_this_week'] = cursor.fetchone()['count']
             
-            # Рассылки
-            cursor.execute('SELECT COUNT(*) as count FROM mailings')
-            stats['total_mailings'] = cursor.fetchone()['count']
+            # Доход за месяц
+            cursor.execute('''
+                SELECT COALESCE(SUM(amount), 0) as total FROM payments 
+                WHERE status = 'approved' 
+                AND created_at >= datetime('now', '-30 days')
+            ''')
+            stats['revenue_month'] = cursor.fetchone()['total']
             
-            cursor.execute('SELECT COUNT(*) as count FROM mailings WHERE status = "completed"')
-            stats['completed_mailings'] = cursor.fetchone()['count']
-            
-            cursor.execute('SELECT SUM(sent) as total FROM mailings')
-            result = cursor.fetchone()
-            stats['total_messages_sent'] = result['total'] or 0
-            
-            # Платежи
+            # Ожидающие платежи
             cursor.execute('SELECT COUNT(*) as count FROM payments WHERE status = "pending"')
             stats['pending_payments'] = cursor.fetchone()['count']
             
-            cursor.execute('SELECT SUM(amount) as total FROM payments WHERE status = "approved" AND DATE(approved_at) >= DATE("now", "-30 days")')
-            result = cursor.fetchone()
-            stats['revenue_month'] = result['total'] or 0
+            # Завершённые рассылки
+            cursor.execute('SELECT COUNT(*) as count FROM mailings WHERE status = "completed"')
+            stats['completed_mailings'] = cursor.fetchone()['count']
             
-            # По тарифам
-            cursor.execute('SELECT subscription_plan, COUNT(*) as count FROM users GROUP BY subscription_plan')
+            # Всего отправлено сообщений
+            cursor.execute('SELECT COALESCE(SUM(sent), 0) as total FROM mailings')
+            stats['total_messages_sent'] = cursor.fetchone()['total']
+            
+            # Всего рассылок
+            cursor.execute('SELECT COUNT(*) as count FROM mailings')
+            stats['total_mailings'] = cursor.fetchone()['count']
+            
+            # Пользователи по тарифам
+            cursor.execute('''
+                SELECT subscription_plan, COUNT(*) as count 
+                FROM users 
+                GROUP BY subscription_plan
+            ''')
             stats['users_by_plan'] = {row['subscription_plan']: row['count'] for row in cursor.fetchall()}
             
             return stats
     
     def close(self):
-        """Закрыть соединение (для совместимости)"""
-        pass
+        """Закрыть соединение с БД"""
+        if hasattr(self._local, 'connection') and self._local.connection:
+            self._local.connection.close()
+            self._local.connection = None
