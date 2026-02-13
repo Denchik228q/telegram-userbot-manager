@@ -2263,19 +2263,19 @@ mailing_conv = ConversationHandler(
 )
 application.add_handler(mailing_conv)
     
-    # ConversationHandler для админ-рассылки
-    admin_broadcast_conv = ConversationHandler(
-        entry_points=[
-            CallbackQueryHandler(admin_broadcast_start, pattern="^admin_broadcast$")
-        ],
-        states={
-            ADMIN_BROADCAST_MESSAGE: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, admin_broadcast_message_received)
-            ]
-        },
-        fallbacks=[CommandHandler('cancel', cancel)]
-    )
-    application.add_handler(admin_broadcast_conv)
+# ConversationHandler для админ-рассылки
+admin_broadcast_conv = ConversationHandler(
+    entry_points=[
+        CallbackQueryHandler(admin_broadcast_start, pattern="^admin_broadcast$")
+    ],
+    states={
+        ADMIN_BROADCAST_MESSAGE: [
+            MessageHandler(filters.TEXT & ~filters.COMMAND, admin_broadcast_message_received)
+        ]
+    },
+    fallbacks=[CommandHandler('cancel', cancel)]
+)
+application.add_handler(admin_broadcast_conv)
 
     # ==================== PAYMENT HANDLERS ====================
     application.add_handler(CallbackQueryHandler(
