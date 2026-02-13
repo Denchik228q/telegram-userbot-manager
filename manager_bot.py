@@ -908,13 +908,16 @@ async def buy_subscription_callback(update: Update, context: ContextTypes.DEFAUL
     if user and user['subscription_plan'] == plan_id:
         current_expires = user.get('subscription_expires')
         if isinstance(current_expires, str):
-            current_expires = datetime.fromisoformat(current_expires)
+            try:
+                current_expires = datetime.fromisoformat(current_expires)
+            except:
+                current_expires = None
         
         if current_expires and current_expires > datetime.now():
             # Уже есть активная подписка этого типа
             days_left = (current_expires - datetime.now()).days
             await query.answer(
-                f"ℹ️ У вас уже есть план {plan['name']}\nОсталось дней: {days_left}",
+                f"ℹ️ У вас уже активен {plan['name']}\nОсталось дней: {days_left}",
                 show_alert=True
             )
             return
@@ -929,27 +932,63 @@ async def buy_subscription_callback(update: Update, context: ContextTypes.DEFAUL
 • Сообщений на рассылку: {'∞' if limits['messages_per_mailing'] == -1 else limits['messages_per_mailing']}
 """
     
-    emoji = PLAN_EMOJI.get(plan_id, '💎')
+    # Получаем эмодзи
+    emoji_map = {
+        'trial': '🆓',
+        'basic': '💼',
+        'pro': '🚀',
+        'premium': '👑'
+    }
+    emoji = emoji_map.get(plan_id, '💎')
     
-    text = TEXTS['plan_details'].format(
-        emoji=emoji,
-        name=plan['name'],
-        price=plan['price'],
-        description=plan['description'],
-        features=features,
-        limits=limits_text
-    )
+    # Формируем текст
+    text = f"""
+{emoji} **{plan['name']}** - {plan['price']} ₽/мес
+
+📋 **Описание:**
+{plan['description']}
+
+✨ **Возможности:**
+{features}
+
+📊 **Лимиты:**
+{limits_text}
+
+💰 **Цена:** {plan['price']} ₽
+⏱ **Период:** {plan['days']} дней
+"""
     
     keyboard = get_plan_details(plan_id)
     
     try:
-        await safe_edit_message(query, text, reply_markup=keyboard, parse_mode='Markdown')
-    except Exception as e:
-        if "message is not modified" in str(e).lower():
-            await query.answer("ℹ️ Детали уже отображены")
+        # Пытаемся отредактировать сообщение
+        await query.message.edit_text(
+            text, 
+            reply_markup=keyboard, 
+            parse_mode='Markdown'
+        )
+        await query.answer()
+    except BadRequest as e:
+        error_str = str(e).lower()
+        
+        if "message is not modified" in error_str:
+            # Сообщение не изменилось - это нормально
+            await query.answer()
+        elif "message to edit not found" in error_str:
+            # Сообщение было удалено, отправляем новое
+            await query.message.reply_text(
+                text,
+                reply_markup=keyboard,
+                parse_mode='Markdown'
+            )
+            await query.answer()
         else:
-            logger.error(f"Error editing message: {e}")
-            await query.answer("❌ Ошибка обновления", show_alert=True)
+            # Другая ошибка
+            logger.error(f"BadRequest in buy_subscription: {e}")
+            await query.answer("❌ Ошибка отображения", show_alert=True)
+    except Exception as e:
+        logger.error(f"Error in buy_subscription: {e}")
+        await query.answer("❌ Произошла ошибка", show_alert=True)
 
 async def payment_method_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Выбор способа оплаты"""
