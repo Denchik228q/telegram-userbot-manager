@@ -1181,6 +1181,161 @@ async def payment_confirmation_callback(update: Update, context: ContextTypes.DE
             await query.message.reply_text(text, reply_markup=reply_markup)
             await query.answer("✅ Заявка отправлена!")
 
+async def approve_payment_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Одобрение платежа администратором"""
+    query = update.callback_query
+    
+    # Проверяем права администратора
+    if query.from_user.id != ADMIN_ID:
+        await query.answer("❌ Недостаточно прав", show_alert=True)
+        return
+    
+    # Получаем ID платежа из callback_data
+    payment_id = query.data.split('_')[1]
+    
+    # Получаем информацию о платеже
+    payment = db.get_payment(payment_id)
+    
+    if not payment:
+        await query.answer("❌ Платёж не найден", show_alert=True)
+        return
+    
+    if payment['status'] != 'pending':
+        await query.answer(f"⚠️ Платёж уже обработан: {payment['status']}", show_alert=True)
+        return
+    
+    # Одобряем платёж
+    success = db.approve_payment(payment_id, query.from_user.id)
+    
+    if success:
+        # Обновляем сообщение администратора
+        admin_text = f"""
+✅ **Платёж одобрен!**
+
+👤 Пользователь: {payment.get('first_name', 'N/A')} (@{payment.get('username', 'N/A')})
+🆔 ID: {payment['user_id']}
+📦 Тариф: {payment['plan']}
+💰 Сумма: {payment['amount']} ₽
+💳 Способ: {payment['payment_method']}
+🆔 Заявка: #{payment_id}
+
+✅ Подписка активирована
+👤 Одобрил: @{query.from_user.username}
+"""
+        
+        try:
+            await query.message.edit_text(admin_text, parse_mode='Markdown')
+        except:
+            pass
+        
+        await query.answer("✅ Платёж одобрен, подписка активирована!")
+        
+        # Уведомляем пользователя
+        user_text = f"""
+🎉 **Отличные новости!**
+
+Ваш платёж подтверждён, подписка активирована!
+
+📦 Тариф: **{payment['plan']}**
+💰 Сумма: {payment['amount']} ₽
+🆔 Заявка: #{payment_id}
+
+✨ Теперь вам доступны все возможности выбранного тарифа.
+Используйте команду /start для начала работы.
+
+Спасибо за покупку! 🚀
+"""
+        
+        try:
+            await context.bot.send_message(
+                chat_id=payment['user_id'],
+                text=user_text,
+                parse_mode='Markdown'
+            )
+        except Exception as e:
+            logger.error(f"Error notifying user about approved payment: {e}")
+    else:
+        await query.answer("❌ Ошибка одобрения платежа", show_alert=True)
+
+
+async def reject_payment_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Отклонение платежа администратором"""
+    query = update.callback_query
+    
+    # Проверяем права администратора
+    if query.from_user.id != ADMIN_ID:
+        await query.answer("❌ Недостаточно прав", show_alert=True)
+        return
+    
+    # Получаем ID платежа из callback_data
+    payment_id = query.data.split('_')[1]
+    
+    # Получаем информацию о платеже
+    payment = db.get_payment(payment_id)
+    
+    if not payment:
+        await query.answer("❌ Платёж не найден", show_alert=True)
+        return
+    
+    if payment['status'] != 'pending':
+        await query.answer(f"⚠️ Платёж уже обработан: {payment['status']}", show_alert=True)
+        return
+    
+    # Отклоняем платёж
+    success = db.reject_payment(payment_id, query.from_user.id)
+    
+    if success:
+        # Обновляем сообщение администратора
+        admin_text = f"""
+❌ **Платёж отклонён!**
+
+👤 Пользователь: {payment.get('first_name', 'N/A')} (@{payment.get('username', 'N/A')})
+🆔 ID: {payment['user_id']}
+📦 Тариф: {payment['plan']}
+💰 Сумма: {payment['amount']} ₽
+💳 Способ: {payment['payment_method']}
+🆔 Заявка: #{payment_id}
+
+❌ Платёж отклонён
+👤 Отклонил: @{query.from_user.username}
+"""
+        
+        try:
+            await query.message.edit_text(admin_text, parse_mode='Markdown')
+        except:
+            pass
+        
+        await query.answer("❌ Платёж отклонён")
+        
+        # Уведомляем пользователя
+        user_text = f"""
+😔 **К сожалению, ваш платёж отклонён**
+
+📦 Тариф: {payment['plan']}
+💰 Сумма: {payment['amount']} ₽
+🆔 Заявка: #{payment_id}
+
+❓ Возможные причины:
+• Не поступила оплата
+• Неверная сумма
+• Технические проблемы
+
+💬 Свяжитесь с поддержкой для уточнения: @starbombbotadmin
+
+Вы можете попробовать оплатить снова.
+"""
+        
+        try:
+            await context.bot.send_message(
+                chat_id=payment['user_id'],
+                text=user_text,
+                parse_mode='Markdown'
+            )
+        except Exception as e:
+            logger.error(f"Error notifying user about rejected payment: {e}")
+    else:
+        await query.answer("❌ Ошибка отклонения платежа", show_alert=True)
+
 async def paid_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Пользователь подтвердил оплату"""
     query = update.callback_query
@@ -1460,79 +1615,6 @@ async def admin_payments_pending_callback(update: Update, context: ContextTypes.
         keyboard = get_back_button('admin_payments')
     
     await safe_edit_message(query, text, reply_markup=keyboard, parse_mode='Markdown')
-
-async def approve_payment_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Одобрить платёж"""
-    query = update.callback_query
-    
-    if not is_admin(query.from_user.id):
-        await query.answer("❌ Доступ запрещён", show_alert=True)
-        return
-    
-    payment_id = int(query.data.split('_')[-1])
-    
-    payment = db.get_payment(payment_id)
-    if not payment:
-        await query.answer("❌ Платёж не найден", show_alert=True)
-        return
-    
-    # Одобряем платёж
-    success = db.approve_payment(payment_id, query.from_user.id)
-    
-    if success:
-        # Уведомляем пользователя
-        user_id = payment['user_id']
-        plan_name = SUBSCRIPTION_PLANS[payment['plan']]['name']
-        days = SUBSCRIPTION_PLANS[payment['plan']]['days']
-        
-        text = TEXTS['payment_approved'].format(plan=plan_name, days=days)
-        
-        try:
-            await context.bot.send_message(user_id, text, parse_mode='Markdown')
-        except:
-            pass
-        
-        await query.answer("✅ Платёж одобрен", show_alert=True)
-        
-        # Обновляем список
-        await admin_payments_pending_callback(update, context)
-    else:
-        await query.answer("❌ Ошибка одобрения", show_alert=True)
-
-async def reject_payment_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Отклонить платёж"""
-    query = update.callback_query
-    
-    if not is_admin(query.from_user.id):
-        await query.answer("❌ Доступ запрещён", show_alert=True)
-        return
-    
-    payment_id = int(query.data.split('_')[-1])
-    
-    payment = db.get_payment(payment_id)
-    if not payment:
-        await query.answer("❌ Платёж не найден", show_alert=True)
-        return
-    
-    # Отклоняем платёж
-    success = db.reject_payment(payment_id, query.from_user.id)
-    
-    if success:
-        # Уведомляем пользователя
-        try:
-            await context.bot.send_message(
-                payment['user_id'],
-                "❌ Ваш платёж был отклонён. Если вы считаете это ошибкой, обратитесь в поддержку."
-            )
-        except:
-            pass
-        
-        await query.answer("❌ Платёж отклонён", show_alert=True)
-        
-        # Обновляем список
-        await admin_payments_pending_callback(update, context)
-    else:
-        await query.answer("❌ Ошибка отклонения", show_alert=True)
 
 async def admin_stats_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Статистика"""
@@ -1855,6 +1937,17 @@ def main():
     application.add_handler(CallbackQueryHandler(
         payment_confirmation_callback, 
         pattern='^paid_(card|crypto)_'
+    ))
+
+    # ==================== ADMIN PAYMENT HANDLERS ====================
+    application.add_handler(CallbackQueryHandler(
+        approve_payment_callback, 
+        pattern='^approve_'
+    ))
+    
+    application.add_handler(CallbackQueryHandler(
+        reject_payment_callback, 
+        pattern='^reject_'
     ))
     
     # ==================== CALLBACK HANDLERS ====================
