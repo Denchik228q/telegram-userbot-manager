@@ -1003,74 +1003,183 @@ async def buy_subscription_callback(update: Update, context: ContextTypes.DEFAUL
         await query.answer("❌ Произошла ошибка", show_alert=True)
 
 async def payment_method_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Выбор способа оплаты"""
+    """Обработка выбора метода оплаты"""
     query = update.callback_query
+    
+    # Формат: pay_card_premium или pay_crypto_premium
     parts = query.data.split('_')
-    plan_id = parts[1]
-    method_id = parts[2] if len(parts) > 2 else None
+    if len(parts) < 3:
+        await query.answer("❌ Некорректные данные", show_alert=True)
+        return
     
-    if not method_id:
-        # Показываем способы оплаты
-        plan = SUBSCRIPTION_PLANS.get(plan_id)
-        if not plan:
-            await query.answer("❌ Тариф не найден", show_alert=True)
-            return
-        
-        text = TEXTS['payment_methods'].format(
-            plan_name=plan['name'],
-            price=plan['price']
-        )
-        
-        keyboard = get_payment_methods(plan_id)
-        
-        await safe_edit_message(query, text, reply_markup=keyboard, parse_mode='Markdown')
+    payment_method = parts[1]  # card или crypto
+    plan_id = parts[2]  # basic, pro, premium
     
+    if plan_id not in SUBSCRIPTION_PLANS:
+        await query.answer("❌ Тариф не найден", show_alert=True)
+        return
+    
+    plan = SUBSCRIPTION_PLANS[plan_id]
+    user = db.get_user(query.from_user.id)
+    
+    if payment_method == 'card':
+        # Оплата картой
+        text = f"""
+💳 Оплата картой
+
+📦 Тариф: {plan['name']}
+💰 Сумма: {plan['price']} ₽
+
+Для оплаты картой переведите {plan['price']} ₽ на карту:
+
+💳 **Номер карты:**
+`2200 1536 8370 4721`
+
+**Получатель:** Денис Д.
+
+После оплаты отправьте скриншот чека боту или нажмите "Я оплатил".
+
+⚠️ Платёж будет проверен администратором в течение 1-24 часов.
+"""
+        
+        keyboard = [
+            [InlineKeyboardButton("✅ Я оплатил", callback_data=f'paid_card_{plan_id}')],
+            [InlineKeyboardButton("◀️ Назад", callback_data=f'buy_{plan_id}')]
+        ]
+        
+    elif payment_method == 'crypto':
+        # Оплата криптой
+        text = f"""
+🪙 Оплата криптовалютой
+
+📦 Тариф: {plan['name']}
+💰 Сумма: {plan['price']} ₽ (~{plan['price'] // 100} USDT)
+
+Для оплаты криптовалютой переведите эквивалент {plan['price']} ₽ на адрес:
+
+🪙 **USDT (TRC-20):**
+`TQx2tg6539Q4vaE1nb57XzPAbdwczmMNX4`
+
+**Сеть:** Tron (TRC-20)
+
+После оплаты отправьте:
+1. Скриншот транзакции
+2. Хэш транзакции
+
+⚠️ Платёж будет проверен администратором в течение 1-24 часов.
+"""
+        
+        keyboard = [
+            [InlineKeyboardButton("✅ Я оплатил", callback_data=f'paid_crypto_{plan_id}')],
+            [InlineKeyboardButton("◀️ Назад", callback_data=f'buy_{plan_id}')]
+        ]
     else:
-        # Обработка выбранного способа оплаты
-        plan = SUBSCRIPTION_PLANS.get(plan_id)
-        method = PAYMENT_METHODS.get(method_id)
-        
-        if not plan or not method:
+        await query.answer("❌ Неизвестный метод оплаты", show_alert=True)
+        return
+    
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    try:
+        await query.message.edit_text(text, reply_markup=reply_markup, parse_mode='Markdown')
+        await query.answer()
+    except BadRequest as e:
+        if "message is not modified" in str(e).lower():
+            await query.answer()
+        else:
+            logger.error(f"Error in payment_method_callback: {e}")
             await query.answer("❌ Ошибка", show_alert=True)
-            return
-        
-        user_id = query.from_user.id
-        
-        if method_id == 'card':
-            # Автоматическая оплата картой (интеграция с платёжной системой)
-            await query.answer("💳 Функция в разработке", show_alert=True)
-            # TODO: интеграция с ЮKassa, Stripe и т.д.
-        
-        elif method_id == 'manual':
-            # Ручная оплата
-            payment_id = db.create_payment(
-                user_id=user_id,
-                plan=plan_id,
-                amount=plan['price'],
-                payment_method='manual'
-            )
-            
-            details = method['details'].format(user_id=user_id)
-            
-            text = TEXTS['payment_manual'].format(payment_details=details)
-            keyboard = get_payment_confirmation(payment_id)
-            
-            await safe_edit_message(query, text, reply_markup=keyboard, parse_mode='Markdown')
-            
-            # Уведомляем админа
-            await send_admin_notification(
-                context.bot,
-                f"💰 **Новый платёж (ожидает подтверждения)**\n\n"
-                f"User: {query.from_user.first_name} (@{query.from_user.username})\n"
-                f"ID: `{user_id}`\n"
-                f"Тариф: {plan['name']}\n"
-                f"Сумма: {plan['price']} ₽\n"
-                f"Payment ID: `{payment_id}`"
-            )
-        
-        elif method_id == 'crypto':
-            await query.answer("₿ Функция в разработке", show_alert=True)
-            # TODO: интеграция с криптоплатежами
+
+
+async def payment_confirmation_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Подтверждение оплаты пользователем"""
+    query = update.callback_query
+    
+    # Формат: paid_card_premium или paid_crypto_premium
+    parts = query.data.split('_')
+    if len(parts) < 3:
+        await query.answer("❌ Некорректные данные", show_alert=True)
+        return
+    
+    payment_method = parts[1]  # card или crypto
+    plan_id = parts[2]  # basic, pro, premium
+    
+    if plan_id not in SUBSCRIPTION_PLANS:
+        await query.answer("❌ Тариф не найден", show_alert=True)
+        return
+    
+    plan = SUBSCRIPTION_PLANS[plan_id]
+    user_id = query.from_user.id
+    
+    # Создаём запись о платеже
+    method_name = "Банковская карта" if payment_method == 'card' else "Криптовалюта"
+    payment_id = db.create_payment(
+        user_id=user_id,
+        plan=plan_id,
+        amount=plan['price'],
+        payment_method=method_name
+    )
+    
+    # Отправляем уведомление администратору
+    admin_text = f"""
+🔔 **Новая заявка на оплату!**
+
+👤 Пользователь: {query.from_user.first_name} (@{query.from_user.username})
+🆔 ID: {user_id}
+📦 Тариф: {plan['name']}
+💰 Сумма: {plan['price']} ₽
+💳 Способ: {method_name}
+🆔 Заявка: #{payment_id}
+
+Ожидает подтверждения платежа.
+"""
+    
+    keyboard = [
+        [
+            InlineKeyboardButton("✅ Одобрить", callback_data=f'approve_{payment_id}'),
+            InlineKeyboardButton("❌ Отклонить", callback_data=f'reject_{payment_id}')
+        ]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    try:
+        await context.bot.send_message(
+            chat_id=ADMIN_ID,
+            text=admin_text,
+            reply_markup=reply_markup,
+            parse_mode='Markdown'
+        )
+    except Exception as e:
+        logger.error(f"Error sending admin notification: {e}")
+    
+    # Уведомляем пользователя
+    text = f"""
+✅ Заявка на оплату отправлена!
+
+📦 Тариф: {plan['name']}
+💰 Сумма: {plan['price']} ₽
+💳 Способ: {method_name}
+🆔 Номер заявки: #{payment_id}
+
+⏳ Ваш платёж будет проверен администратором в течение 1-24 часов.
+После подтверждения подписка будет активирована автоматически.
+
+📧 Вы получите уведомление, когда платёж будет обработан.
+"""
+    
+    keyboard = [
+        [InlineKeyboardButton("◀️ В главное меню", callback_data='main_menu')]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    try:
+        await query.message.edit_text(text, reply_markup=reply_markup)
+        await query.answer("✅ Заявка отправлена администратору!")
+    except BadRequest as e:
+        if "message is not modified" in str(e).lower():
+            await query.answer("✅ Заявка отправлена!")
+        else:
+            await query.message.reply_text(text, reply_markup=reply_markup)
+            await query.answer("✅ Заявка отправлена!")
 
 async def paid_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Пользователь подтвердил оплату"""
@@ -1736,6 +1845,17 @@ def main():
         fallbacks=[CommandHandler('cancel', cancel)]
     )
     application.add_handler(admin_broadcast_conv)
+
+    # ==================== PAYMENT HANDLERS ====================
+    application.add_handler(CallbackQueryHandler(
+        payment_method_callback, 
+        pattern='^pay_(card|crypto)_'
+    ))
+    
+    application.add_handler(CallbackQueryHandler(
+        payment_confirmation_callback, 
+        pattern='^paid_(card|crypto)_'
+    ))
     
     # ==================== CALLBACK HANDLERS ====================
     
