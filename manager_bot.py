@@ -2968,7 +2968,7 @@ def main():
     application.add_handler(CallbackQueryHandler(manage_accounts_callback, pattern="^manage_accounts$"))
     application.add_handler(CallbackQueryHandler(account_info_callback, pattern="^account_info_"))
     application.add_handler(CallbackQueryHandler(disconnect_account_callback, pattern="^disconnect_account_"))
-    application.add_handler(CallbackQueryHandler(confirm_disconnect_callback, pattern="^confirm_disconnect_"))
+    #application.add_handler(CallbackQueryHandler(confirm_disconnect_callback, pattern="^confirm_disconnect_"))
     application.add_handler(CallbackQueryHandler(accounts_back_callback, pattern="^accounts_back$"))
     
     # Подписки
