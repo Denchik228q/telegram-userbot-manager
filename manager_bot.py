@@ -1,33 +1,33 @@
 ﻿"""
-Основной бот для управления рассылками
+Telegram Userbot Manager Bot
+Основной файл бота
 """
 import asyncio
 import logging
-import sys
 from datetime import datetime, timedelta
-
+import random
+import telegram
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
     CommandHandler,
-    CallbackQueryHandler,
     MessageHandler,
+    CallbackQueryHandler,
     ConversationHandler,
     ContextTypes,
     filters
 )
+from telegram.error import BadRequest, NetworkError, TimedOut
+from telethon import TelegramClient, errors as telethon_errors
+from telethon.sessions import StringSession
 
-# Импорты модулей
-from config import (
-    BOT_TOKEN, ADMIN_ID, SUBSCRIPTION_PLANS, PAYMENT_METHODS,
-    MAILING_SETTINGS, LOG_LEVEL, LOG_FORMAT, LOG_FILE
-)
+from config import *
 from database import Database
 from userbot_manager import UserbotManager
+from keyboards import *
+from texts import TEXTS
 from scheduler import MailingScheduler
 from backup_manager import BackupManager
-from keyboards import *
-from texts import TEXTS, STATUS_EMOJI, PLAN_EMOJI
 
 # ==================== LOGGING ====================
 logging.basicConfig(
@@ -122,6 +122,44 @@ async def send_admin_notification(bot, message):
     except Exception as e:
         logger.error(f"Error sending admin notification: {e}")
 
+
+async def safe_edit_message(query, text, reply_markup=None, parse_mode='Markdown'):
+    """Безопасное редактирование сообщения с обработкой ошибок"""
+    try:
+        await query.message.edit_text(
+            text, 
+            reply_markup=reply_markup, 
+            parse_mode=parse_mode
+        )
+        await query.answer()
+        return True
+    except BadRequest as e:
+        error_str = str(e).lower()
+        if "message is not modified" in error_str:
+            await query.answer("ℹ️ Данные уже отображены")
+            return False
+        elif "message to edit not found" in error_str:
+            # Сообщение было удалено, отправляем новое
+            try:
+                await query.message.reply_text(
+                    text,
+                    reply_markup=reply_markup,
+                    parse_mode=parse_mode
+                )
+                await query.answer()
+                return True
+            except:
+                await query.answer("❌ Ошибка отображения", show_alert=True)
+                return False
+        else:
+            logger.error(f"BadRequest error in safe_edit_message: {e}")
+            await query.answer("❌ Ошибка", show_alert=True)
+            return False
+    except Exception as e:
+        logger.error(f"Unexpected error in safe_edit_message: {e}")
+        await query.answer("❌ Ошибка", show_alert=True)
+        return False
+
 # ==================== COMMAND HANDLERS ====================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -209,8 +247,7 @@ async def my_accounts_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     text = TEXTS['my_accounts'].format(count=count, limit=limit_text)
     keyboard = get_accounts_menu(has_accounts=count > 0)
     
-    await query.message.edit_text(text, reply_markup=keyboard, parse_mode='Markdown')
-    await query.answer()
+    await safe_edit_message(query, text, reply_markup=keyboard, parse_mode='Markdown')
 
 async def connect_account_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Начало подключения аккаунта"""
@@ -417,8 +454,7 @@ async def manage_accounts_callback(update: Update, context: ContextTypes.DEFAULT
     text = "⚙️ **Управление аккаунтами**\n\nВыберите аккаунт:"
     keyboard = get_accounts_list(accounts)
     
-    await query.message.edit_text(text, reply_markup=keyboard, parse_mode='Markdown')
-    await query.answer()
+    await safe_edit_message(query, text, reply_markup=keyboard, parse_mode='Markdown')
 
 async def account_info_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Информация об аккаунте"""
@@ -447,8 +483,7 @@ async def account_info_callback(update: Update, context: ContextTypes.DEFAULT_TY
     
     keyboard = get_account_actions(account_id)
     
-    await query.message.edit_text(text, reply_markup=keyboard, parse_mode='Markdown')
-    await query.answer()
+    await safe_edit_message(query, text, reply_markup=keyboard, parse_mode='Markdown')
 
 async def disconnect_account_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Отключение аккаунта"""
@@ -583,8 +618,7 @@ async def toggle_account_selection(update: Update, context: ContextTypes.DEFAULT
     text = TEXTS['select_accounts'].format(targets_count=targets_count)
     keyboard = get_account_selection(accounts, selected_ids=selected)
     
-    await query.message.edit_text(text, reply_markup=keyboard, parse_mode='Markdown')
-    await query.answer()
+    await safe_edit_message(query, text, reply_markup=keyboard, parse_mode='Markdown')
 
 async def continue_with_selected(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Продолжить с выбранными аккаунтами"""
@@ -848,19 +882,41 @@ async def subscriptions_callback(update: Update, context: ContextTypes.DEFAULT_T
     
     keyboard = get_subscription_menu(current_plan)
     
-    await query.message.edit_text(text, reply_markup=keyboard, parse_mode='Markdown')
-    await query.answer()
+    await safe_edit_message(query, text, reply_markup=keyboard, parse_mode='Markdown')
 
 async def buy_subscription_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Покупка тарифа"""
     query = update.callback_query
-    plan_id = query.data.split('_')[1]
+    
+    # Проверяем формат данных
+    parts = query.data.split('_')
+    if len(parts) < 2:
+        await query.answer("❌ Некорректные данные", show_alert=True)
+        return
+    
+    plan_id = parts[1]
     
     if plan_id not in SUBSCRIPTION_PLANS:
         await query.answer("❌ Тариф не найден", show_alert=True)
         return
     
     plan = SUBSCRIPTION_PLANS[plan_id]
+    
+    # Проверяем не пытается ли купить текущий план
+    user = db.get_user(query.from_user.id)
+    if user and user['subscription_plan'] == plan_id:
+        current_expires = user.get('subscription_expires')
+        if isinstance(current_expires, str):
+            current_expires = datetime.fromisoformat(current_expires)
+        
+        if current_expires and current_expires > datetime.now():
+            # Уже есть активная подписка этого типа
+            days_left = (current_expires - datetime.now()).days
+            await query.answer(
+                f"ℹ️ У вас уже есть план {plan['name']}\nОсталось дней: {days_left}",
+                show_alert=True
+            )
+            return
     
     # Форматируем детали тарифа
     features = '\n'.join(plan['features'])
@@ -885,8 +941,14 @@ async def buy_subscription_callback(update: Update, context: ContextTypes.DEFAUL
     
     keyboard = get_plan_details(plan_id)
     
-    await query.message.edit_text(text, reply_markup=keyboard, parse_mode='Markdown')
-    await query.answer()
+    try:
+        await safe_edit_message(query, text, reply_markup=keyboard, parse_mode='Markdown')
+    except Exception as e:
+        if "message is not modified" in str(e).lower():
+            await query.answer("ℹ️ Детали уже отображены")
+        else:
+            logger.error(f"Error editing message: {e}")
+            await query.answer("❌ Ошибка обновления", show_alert=True)
 
 async def payment_method_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Выбор способа оплаты"""
@@ -909,8 +971,7 @@ async def payment_method_callback(update: Update, context: ContextTypes.DEFAULT_
         
         keyboard = get_payment_methods(plan_id)
         
-        await query.message.edit_text(text, reply_markup=keyboard, parse_mode='Markdown')
-        await query.answer()
+        await safe_edit_message(query, text, reply_markup=keyboard, parse_mode='Markdown')
     
     else:
         # Обработка выбранного способа оплаты
@@ -942,8 +1003,7 @@ async def payment_method_callback(update: Update, context: ContextTypes.DEFAULT_
             text = TEXTS['payment_manual'].format(payment_details=details)
             keyboard = get_payment_confirmation(payment_id)
             
-            await query.message.edit_text(text, reply_markup=keyboard, parse_mode='Markdown')
-            await query.answer()
+            await safe_edit_message(query, text, reply_markup=keyboard, parse_mode='Markdown')
             
             # Уведомляем админа
             await send_admin_notification(
@@ -1002,8 +1062,7 @@ async def scheduler_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     text = TEXTS['scheduler'].format(active_count=active_count)
     keyboard = get_scheduler_menu(has_schedules=len(schedules) > 0)
     
-    await query.message.edit_text(text, reply_markup=keyboard, parse_mode='Markdown')
-    await query.answer()
+    await safe_edit_message(query, text, reply_markup=keyboard, parse_mode='Markdown')
 
 async def list_schedules_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Список расписаний"""
@@ -1019,8 +1078,7 @@ async def list_schedules_callback(update: Update, context: ContextTypes.DEFAULT_
     text = "📅 **Ваши расписания:**"
     keyboard = get_schedules_list(schedules)
     
-    await query.message.edit_text(text, reply_markup=keyboard, parse_mode='Markdown')
-    await query.answer()
+    await safe_edit_message(query, text, reply_markup=keyboard, parse_mode='Markdown')
 
 async def schedule_info_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Информация о расписании"""
@@ -1048,8 +1106,7 @@ async def schedule_info_callback(update: Update, context: ContextTypes.DEFAULT_T
     
     keyboard = get_schedule_actions(schedule_id, schedule['is_active'])
     
-    await query.message.edit_text(text, reply_markup=keyboard, parse_mode='Markdown')
-    await query.answer()
+    await safe_edit_message(query, text, reply_markup=keyboard, parse_mode='Markdown')
 
 async def delete_schedule_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Удаление расписания"""
@@ -1093,8 +1150,7 @@ async def history_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     keyboard = get_history_menu()
     
-    await query.message.edit_text(text, reply_markup=keyboard, parse_mode='Markdown')
-    await query.answer()
+    await safe_edit_message(query, text, reply_markup=keyboard, parse_mode='Markdown')
 
 async def history_all_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Все рассылки"""
@@ -1110,8 +1166,7 @@ async def history_all_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     text = "📜 **Все рассылки:**"
     keyboard = get_mailings_list(mailings)
     
-    await query.message.edit_text(text, reply_markup=keyboard, parse_mode='Markdown')
-    await query.answer()
+    await safe_edit_message(query, text, reply_markup=keyboard, parse_mode='Markdown')
 
 async def mailing_info_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Информация о рассылке"""
@@ -1157,8 +1212,7 @@ async def mailing_info_callback(update: Update, context: ContextTypes.DEFAULT_TY
     
     keyboard = get_mailing_actions(mailing_id, mailing['status'])
     
-    await query.message.edit_text(text, reply_markup=keyboard, parse_mode='Markdown')
-    await query.answer()
+    await safe_edit_message(query, text, reply_markup=keyboard, parse_mode='Markdown')
 
 # ==================== ADMIN PANEL ====================
 
@@ -1184,8 +1238,7 @@ async def admin_panel_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     
     keyboard = get_admin_panel()
     
-    await query.message.edit_text(text, reply_markup=keyboard, parse_mode='Markdown')
-    await query.answer()
+    await safe_edit_message(query, text, reply_markup=keyboard, parse_mode='Markdown')
 
 async def admin_users_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Управление пользователями"""
@@ -1198,8 +1251,7 @@ async def admin_users_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     text = "👥 **Управление пользователями**"
     keyboard = get_admin_users_menu()
     
-    await query.message.edit_text(text, reply_markup=keyboard, parse_mode='Markdown')
-    await query.answer()
+    await safe_edit_message(query, text, reply_markup=keyboard, parse_mode='Markdown')
 
 async def admin_payments_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Управление платежами"""
@@ -1214,8 +1266,7 @@ async def admin_payments_callback(update: Update, context: ContextTypes.DEFAULT_
     text = "💰 **Управление платежами**"
     keyboard = get_admin_payments_menu(pending_count=len(pending))
     
-    await query.message.edit_text(text, reply_markup=keyboard, parse_mode='Markdown')
-    await query.answer()
+    await safe_edit_message(query, text, reply_markup=keyboard, parse_mode='Markdown')
 
 async def admin_payments_pending_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Ожидающие платежи"""
@@ -1247,8 +1298,7 @@ async def admin_payments_pending_callback(update: Update, context: ContextTypes.
     else:
         keyboard = get_back_button('admin_payments')
     
-    await query.message.edit_text(text, reply_markup=keyboard, parse_mode='Markdown')
-    await query.answer()
+    await safe_edit_message(query, text, reply_markup=keyboard, parse_mode='Markdown')
 
 async def approve_payment_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Одобрить платёж"""
@@ -1362,8 +1412,7 @@ async def admin_stats_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     
     keyboard = get_back_button('admin_panel')
     
-    await query.message.edit_text(text, reply_markup=keyboard, parse_mode='Markdown')
-    await query.answer()
+    await safe_edit_message(query, text, reply_markup=keyboard, parse_mode='Markdown')
 
 async def admin_backup_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Резервные копии"""
@@ -1493,16 +1542,44 @@ async def debug_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
 
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик ошибок"""
-    logger.error(f"Update {update} caused error {context.error}", exc_info=context.error)
+    error = context.error
+    
+    # Игнорируем некритичные ошибки
+    if isinstance(error, telegram.error.BadRequest):
+        if "message is not modified" in str(error).lower():
+            # Сообщение не изменилось - это не ошибка
+            logger.debug(f"Message not modified (ignored): {error}")
+            return
+        elif "message to edit not found" in str(error).lower():
+            logger.debug(f"Message to edit not found (ignored): {error}")
+            return
+        elif "query is too old" in str(error).lower():
+            logger.debug(f"Query too old (ignored): {error}")
+            if update and update.callback_query:
+                try:
+                    await update.callback_query.answer("⚠️ Запрос устарел, попробуйте снова")
+                except:
+                    pass
+            return
+    
+    # Логируем серьёзные ошибки
+    logger.error(f"Update {update} caused error {error}", exc_info=error)
     
     try:
         if update and update.effective_user:
-            await context.bot.send_message(
-                update.effective_user.id,
-                "❌ Произошла ошибка. Попробуйте позже или обратитесь в поддержку."
-            )
-    except:
-        pass
+            error_text = "❌ Произошла ошибка. Попробуйте позже или обратитесь в поддержку."
+            
+            if update.callback_query:
+                try:
+                    await update.callback_query.answer(error_text, show_alert=True)
+                except:
+                    await context.bot.send_message(update.effective_user.id, error_text)
+            elif update.message:
+                await update.message.reply_text(error_text)
+            else:
+                await context.bot.send_message(update.effective_user.id, error_text)
+    except Exception as e:
+        logger.error(f"Error in error_handler: {e}")
 
 # ==================== MAIN ====================
 
