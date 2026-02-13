@@ -2233,35 +2233,35 @@ mailing_conv = ConversationHandler(
     allow_reentry=True
 )
     
-    # ConversationHandler для создания рассылки
-    mailing_conv = ConversationHandler(
-        entry_points=[
-            CallbackQueryHandler(create_mailing_callback, pattern="^create_mailing$")
+# ConversationHandler для создания рассылки
+mailing_conv = ConversationHandler(
+    entry_points=[
+        CallbackQueryHandler(create_mailing_callback, pattern="^create_mailing$")
+    ],
+    states={
+        MAILING_TARGETS: [MessageHandler(filters.TEXT & ~filters.COMMAND, mailing_targets_received)],
+        MAILING_ACCOUNTS: [
+            CallbackQueryHandler(toggle_account_selection, pattern="^toggle_account_"),
+            CallbackQueryHandler(continue_with_selected, pattern="^continue_with_selected$")
         ],
-        states={
-            MAILING_TARGETS: [MessageHandler(filters.TEXT & ~filters.COMMAND, mailing_targets_received)],
-            MAILING_ACCOUNTS: [
-                CallbackQueryHandler(toggle_account_selection, pattern="^toggle_account_"),
-                CallbackQueryHandler(continue_with_selected, pattern="^continue_with_selected$")
-            ],
-            MAILING_MESSAGE: [
-                MessageHandler(
-                    (filters.TEXT | filters.PHOTO | filters.VIDEO | filters.Document.ALL) & ~filters.COMMAND,
-                    mailing_message_received
-                )
-            ],
-            MAILING_CONFIRM: [
-                CallbackQueryHandler(confirm_mailing_callback, pattern="^confirm_mailing$"),
-                CallbackQueryHandler(cancel_mailing_callback, pattern="^cancel_mailing$")
-            ]
-        },
-        fallbacks=[
-            CommandHandler('cancel', cancel),
+        MAILING_MESSAGE: [
+            MessageHandler(
+                (filters.TEXT | filters.PHOTO | filters.VIDEO | filters.Document.ALL) & ~filters.COMMAND,
+                mailing_message_received
+            )
+        ],
+        MAILING_CONFIRM: [
+            CallbackQueryHandler(confirm_mailing_callback, pattern="^confirm_mailing$"),
             CallbackQueryHandler(cancel_mailing_callback, pattern="^cancel_mailing$")
-        ],
-        allow_reentry=True
-    )
-    application.add_handler(mailing_conv)
+        ]
+    },
+    fallbacks=[
+        CommandHandler('cancel', cancel),
+        CallbackQueryHandler(cancel_mailing_callback, pattern="^cancel_mailing$")
+    ],
+    allow_reentry=True
+)
+application.add_handler(mailing_conv)
     
     # ConversationHandler для админ-рассылки
     admin_broadcast_conv = ConversationHandler(
