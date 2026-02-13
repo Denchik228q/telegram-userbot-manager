@@ -48,14 +48,14 @@ scheduler = None
 backup_manager = BackupManager()
 
 # ==================== CONVERSATION STATES ====================
-# Подключение аккаунта
-PHONE, CODE, PASSWORD = range(3)
+# Connect account states
+CONNECT_PHONE, CONNECT_CODE, CONNECT_PASSWORD = range(3)
 
-# Создание рассылки
-MAILING_TARGETS, MAILING_ACCOUNTS, MAILING_MESSAGE, MAILING_CONFIRM = range(4)
+# Mailing states
+MAILING_RECIPIENTS, MAILING_MESSAGE, MAILING_CONFIRM, MAILING_ACCOUNT = range(4)
 
-# Админ рассылка
-ADMIN_BROADCAST_MESSAGE = 0
+# Admin broadcast states
+ADMIN_BROADCAST_MESSAGE, ADMIN_BROADCAST_CONFIRM = range(2)
 
 # ==================== HELPER FUNCTIONS ====================
 
@@ -545,34 +545,6 @@ async def create_mailing_callback(update: Update, context: ContextTypes.DEFAULT_
     )
     await query.answer()
 
-async def create_mailing_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Начало создания рассылки (ConversationHandler entry point)"""
-    user_id = update.effective_user.id
-    
-    # Проверки
-    is_active, plan = check_subscription(user_id)
-    if not is_active:
-        await update.message.reply_text(f"❌ {plan}")
-        return ConversationHandler.END
-    
-    can_create, error = check_limits(user_id, 'mailings')
-    if not can_create:
-        await update.message.reply_text(f"❌ {error}")
-        return ConversationHandler.END
-    
-    accounts = db.get_user_accounts(user_id)
-    if not accounts:
-        await update.message.reply_text("❌ Сначала подключите хотя бы один аккаунт")
-        return ConversationHandler.END
-    
-    await update.message.reply_text(
-        TEXTS['create_mailing'],
-        reply_markup=get_cancel_button(),
-        parse_mode='Markdown'
-    )
-    
-    return MAILING_TARGETS
-
 async def mailing_targets_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Получены цели для рассылки"""
     text = update.message.text.strip()
@@ -639,63 +611,6 @@ async def continue_with_selected(update: Update, context: ContextTypes.DEFAULT_T
     await query.answer()
     
     return MAILING_MESSAGE
-
-async def mailing_message_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Получено сообщение для рассылки"""
-    message = update.message
-    
-    # Определяем тип сообщения
-    if message.text:
-        message_type = 'text'
-        message_text = message.text
-        media_path = None
-    elif message.photo:
-        message_type = 'photo'
-        message_text = message.caption or ''
-        media_path = None  # TODO: сохранить file_id
-    elif message.video:
-        message_type = 'video'
-        message_text = message.caption or ''
-        media_path = None
-    elif message.document:
-        message_type = 'document'
-        message_text = message.caption or ''
-        media_path = None
-    else:
-        await message.reply_text("❌ Неподдерживаемый тип сообщения")
-        return MAILING_MESSAGE
-    
-    # Сохраняем в контекст
-    context.user_data['message_text'] = message_text
-    context.user_data['message_type'] = message_type
-    context.user_data['media_path'] = media_path
-    
-    # Показываем подтверждение
-    targets = context.user_data.get('targets', [])
-    accounts = context.user_data.get('selected_accounts', [])
-    
-    # Расчёт примерного времени
-    total_messages = len(targets)
-    avg_delay = (MAILING_SETTINGS['min_delay'] + MAILING_SETTINGS['max_delay']) / 2
-    estimated_time = (total_messages * avg_delay) / 60  # в минутах
-    
-    preview = message_text[:100] + '...' if len(message_text) > 100 else message_text
-    
-    text = TEXTS['confirm_mailing'].format(
-        targets_count=len(targets),
-        accounts_count=len(accounts),
-        estimated_time=int(estimated_time),
-        min_delay=MAILING_SETTINGS['min_delay'],
-        max_delay=MAILING_SETTINGS['max_delay'],
-        per_hour=MAILING_SETTINGS['messages_per_hour'],
-        message_preview=preview
-    )
-    
-    keyboard = get_mailing_confirmation()
-    
-    await message.reply_text(text, reply_markup=keyboard, parse_mode='Markdown')
-    
-    return MAILING_CONFIRM
 
 async def confirm_mailing_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Подтверждение и запуск рассылки"""
@@ -1001,6 +916,428 @@ async def buy_subscription_callback(update: Update, context: ContextTypes.DEFAUL
     except Exception as e:
         logger.error(f"Error in buy_subscription: {e}")
         await query.answer("❌ Произошла ошибка", show_alert=True)
+
+# ==================== MAILING FUNCTIONS ====================
+
+async def create_mailing_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Начало создания рассылки"""
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = query.from_user.id
+    
+    # Проверяем наличие подключенных аккаунтов
+    accounts = db.get_user_accounts(user_id)
+    if not accounts:
+        await query.message.edit_text(
+            "❌ У вас нет подключенных аккаунтов.\n\n"
+            "Сначала подключите хотя бы один аккаунт.",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("◀️ Назад", callback_data='main_menu')
+            ]])
+        )
+        return ConversationHandler.END
+    
+    # Проверяем лимиты
+    user = db.get_user(user_id)
+    plan_limits = SUBSCRIPTION_PLANS[user['subscription_plan']]['limits']
+    
+    # Получаем количество рассылок за сегодня
+    today_mailings = db.get_today_mailings_count(user_id)
+    
+    if plan_limits['mailings_per_day'] != -1 and today_mailings >= plan_limits['mailings_per_day']:
+        await query.message.edit_text(
+            f"❌ Вы достигли лимита рассылок на сегодня.\n\n"
+            f"Ваш тариф: {user['subscription_plan']}\n"
+            f"Лимит: {plan_limits['mailings_per_day']} рассылок/день\n"
+            f"Использовано: {today_mailings}\n\n"
+            f"Обновите тариф для увеличения лимита.",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("💎 Улучшить тариф", callback_data='subscriptions')
+            ], [
+                InlineKeyboardButton("◀️ Назад", callback_data='main_menu')
+            ]])
+        )
+        return ConversationHandler.END
+    
+    text = """
+📨 Создание рассылки
+
+Шаг 1/3: Укажите получателей
+
+Введите username получателей (по одному на строку) или ID чата/группы.
+
+Примеры:
+@username1
+@username2
+https://t.me/username3
+-1001234567890
+
+Или отправьте /cancel для отмены.
+"""
+    
+    keyboard = [[InlineKeyboardButton("❌ Отмена", callback_data='cancel_mailing')]]
+    
+    await query.message.edit_text(
+        text,
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+    
+    # Инициализируем данные рассылки
+    context.user_data['mailing'] = {}
+    
+    logger.info(f"User {user_id} started mailing creation")
+    
+    return MAILING_RECIPIENTS
+
+
+async def mailing_recipients(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка получателей рассылки"""
+    user_id = update.effective_user.id
+    text = update.message.text.strip()
+    
+    logger.info(f"User {user_id} entered recipients: {text[:100]}")
+    
+    # Парсим получателей
+    recipients = []
+    for line in text.split('\n'):
+        line = line.strip()
+        if not line:
+            continue
+        
+        # Удаляем @ если есть
+        if line.startswith('@'):
+            line = line[1:]
+        
+        # Извлекаем username из ссылки t.me
+        if 't.me/' in line:
+            line = line.split('t.me/')[-1].split('?')[0]
+        
+        recipients.append(line)
+    
+    if not recipients:
+        await update.message.reply_text(
+            "❌ Не указаны получатели.\n\n"
+            "Пожалуйста, введите хотя бы одного получателя.",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("❌ Отмена", callback_data='cancel_mailing')
+            ]])
+        )
+        return MAILING_RECIPIENTS
+    
+    # Проверяем лимит
+    user = db.get_user(user_id)
+    plan_limits = SUBSCRIPTION_PLANS[user['subscription_plan']]['limits']
+    
+    if plan_limits['messages_per_mailing'] != -1 and len(recipients) > plan_limits['messages_per_mailing']:
+        await update.message.reply_text(
+            f"❌ Превышен лимит получателей.\n\n"
+            f"Ваш тариф: {user['subscription_plan']}\n"
+            f"Лимит: {plan_limits['messages_per_mailing']} получателей\n"
+            f"Вы указали: {len(recipients)}\n\n"
+            f"Обновите тариф или уменьшите количество получателей.",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("💎 Улучшить тариф", callback_data='subscriptions')
+            ], [
+                InlineKeyboardButton("❌ Отмена", callback_data='cancel_mailing')
+            ]])
+        )
+        return MAILING_RECIPIENTS
+    
+    # Сохраняем получателей
+    context.user_data['mailing']['recipients'] = recipients
+    
+    text = f"""
+📨 Создание рассылки
+
+Шаг 2/3: Введите сообщение
+
+✅ Получатели: {len(recipients)}
+
+Теперь введите текст сообщения, которое будет отправлено всем получателям.
+
+Вы можете использовать форматирование:
+• **жирный** 
+• *курсив*
+• `код`
+
+Или отправьте /cancel для отмены.
+"""
+    
+    keyboard = [[InlineKeyboardButton("❌ Отмена", callback_data='cancel_mailing')]]
+    
+    await update.message.reply_text(
+        text,
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+    
+    logger.info(f"User {user_id} set {len(recipients)} recipients")
+    
+    return MAILING_MESSAGE
+
+
+async def mailing_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка сообщения рассылки"""
+    user_id = update.effective_user.id
+    message_text = update.message.text
+    
+    logger.info(f"User {user_id} entered message: {message_text[:100]}")
+    
+    if not message_text or len(message_text.strip()) == 0:
+        await update.message.reply_text(
+            "❌ Сообщение не может быть пустым.\n\n"
+            "Пожалуйста, введите текст сообщения.",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("❌ Отмена", callback_data='cancel_mailing')
+            ]])
+        )
+        return MAILING_MESSAGE
+    
+    # Сохраняем сообщение
+    context.user_data['mailing']['message'] = message_text
+    
+    # Получаем аккаунты пользователя
+    accounts = db.get_user_accounts(user_id)
+    
+    if len(accounts) == 1:
+        # Только один аккаунт - используем его автоматически
+        context.user_data['mailing']['account_id'] = accounts[0]['id']
+        return await show_mailing_confirm(update, context)
+    else:
+        # Несколько аккаунтов - даём выбрать
+        text = f"""
+📨 Создание рассылки
+
+Шаг 3/3: Выберите аккаунт
+
+✅ Получатели: {len(context.user_data['mailing']['recipients'])}
+✅ Сообщение: установлено
+
+Выберите аккаунт, с которого будет отправлена рассылка:
+"""
+        
+        keyboard = []
+        for account in accounts:
+            keyboard.append([InlineKeyboardButton(
+                f"📱 {account['phone']}",
+                callback_data=f"mailing_account_{account['id']}"
+            )])
+        
+        keyboard.append([InlineKeyboardButton("❌ Отмена", callback_data='cancel_mailing')])
+        
+        await update.message.reply_text(
+            text,
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        
+        return MAILING_ACCOUNT
+
+
+async def mailing_select_account(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Выбор аккаунта для рассылки"""
+    query = update.callback_query
+    await query.answer()
+    
+    account_id = int(query.data.split('_')[-1])
+    context.user_data['mailing']['account_id'] = account_id
+    
+    return await show_mailing_confirm(update, context, edit_message=True)
+
+
+async def show_mailing_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE, edit_message=False):
+    """Показ подтверждения рассылки"""
+    mailing_data = context.user_data['mailing']
+    user_id = update.effective_user.id
+    
+    # Получаем информацию об аккаунте
+    account = db.get_account(mailing_data['account_id'])
+    
+    recipients_preview = '\n'.join(['@' + r for r in mailing_data['recipients'][:5]])
+    if len(mailing_data['recipients']) > 5:
+        recipients_preview += f"\n... и ещё {len(mailing_data['recipients']) - 5}"
+    
+    message_preview = mailing_data['message'][:200]
+    if len(mailing_data['message']) > 200:
+        message_preview += '...'
+    
+    text = f"""
+📨 Подтверждение рассылки
+
+📱 Аккаунт: {account['phone']}
+👥 Получатели: {len(mailing_data['recipients'])}
+
+📝 Сообщение:
+{message_preview}
+
+📋 Получатели:
+{recipients_preview}
+
+Подтвердите отправку рассылки.
+"""
+    
+    keyboard = [
+        [InlineKeyboardButton("✅ Подтвердить и отправить", callback_data='confirm_mailing')],
+        [InlineKeyboardButton("❌ Отмена", callback_data='cancel_mailing')]
+    ]
+    
+    if edit_message:
+        await update.callback_query.message.edit_text(
+            text,
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+    else:
+        await update.message.reply_text(
+            text,
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+    
+    return MAILING_CONFIRM
+
+
+async def mailing_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Подтверждение и запуск рассылки"""
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = query.from_user.id
+    mailing_data = context.user_data.get('mailing', {})
+    
+    if not mailing_data:
+        await query.message.edit_text(
+            "❌ Данные рассылки потеряны. Попробуйте создать рассылку заново.",
+            reply_markup=get_main_menu()
+        )
+        return ConversationHandler.END
+    
+    # Создаём запись в БД
+    mailing_id = db.create_mailing(
+        user_id=user_id,
+        account_id=mailing_data['account_id'],
+        recipients=mailing_data['recipients'],
+        message=mailing_data['message'],
+        status='pending'
+    )
+    
+    await query.message.edit_text(
+        f"✅ Рассылка #{mailing_id} создана!\n\n"
+        f"👥 Получателей: {len(mailing_data['recipients'])}\n"
+        f"⏳ Статус: Запускается...\n\n"
+        f"Рассылка начнётся в течение минуты.",
+        reply_markup=get_main_menu()
+    )
+    
+    # Запускаем рассылку в фоне
+    asyncio.create_task(execute_mailing(mailing_id, user_id, context))
+    
+    # Очищаем данные
+    context.user_data.pop('mailing', None)
+    
+    logger.info(f"Mailing {mailing_id} created and started by user {user_id}")
+    
+    return ConversationHandler.END
+
+
+async def mailing_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Отмена создания рассылки"""
+    # Очищаем данные
+    context.user_data.pop('mailing', None)
+    
+    text = "❌ Создание рассылки отменено."
+    keyboard = get_main_menu()
+    
+    if update.callback_query:
+        await update.callback_query.answer("Отменено")
+        await update.callback_query.message.edit_text(text, reply_markup=keyboard)
+    else:
+        await update.message.reply_text(text, reply_markup=keyboard)
+    
+    return ConversationHandler.END
+
+
+async def execute_mailing(mailing_id: int, user_id: int, context: ContextTypes.DEFAULT_TYPE):
+    """Выполнение рассылки"""
+    try:
+        # Получаем данные рассылки
+        mailing = db.get_mailing(mailing_id)
+        if not mailing:
+            logger.error(f"Mailing {mailing_id} not found")
+            return
+        
+        account = db.get_account(mailing['account_id'])
+        if not account:
+            logger.error(f"Account {mailing['account_id']} not found")
+            db.update_mailing_status(mailing_id, 'failed', 'Account not found')
+            return
+        
+        # Получаем клиент
+        client = await userbot_manager.get_client(account['id'])
+        if not client:
+            logger.error(f"Failed to get client for account {account['id']}")
+            db.update_mailing_status(mailing_id, 'failed', 'Failed to connect account')
+            return
+        
+        # Обновляем статус
+        db.update_mailing_status(mailing_id, 'in_progress')
+        
+        recipients = mailing['recipients']
+        message = mailing['message']
+        
+        sent = 0
+        failed = 0
+        
+        for recipient in recipients:
+            try:
+                # Отправляем сообщение
+                await client.send_message(recipient, message)
+                sent += 1
+                logger.info(f"Message sent to {recipient} (mailing {mailing_id})")
+                
+                # Задержка между сообщениями (анти-спам)
+                await asyncio.sleep(random.uniform(2, 5))
+                
+            except Exception as e:
+                failed += 1
+                logger.error(f"Failed to send message to {recipient}: {e}")
+                await asyncio.sleep(1)
+        
+        # Обновляем статус
+        status = 'completed' if failed == 0 else 'partial'
+        db.update_mailing_status(
+            mailing_id, 
+            status, 
+            f'Sent: {sent}, Failed: {failed}'
+        )
+        
+        # Уведомляем пользователя
+        result_text = f"""
+✅ Рассылка #{mailing_id} завершена!
+
+📊 Статистика:
+• Отправлено: {sent}
+• Не доставлено: {failed}
+• Всего получателей: {len(recipients)}
+
+{"✅ Все сообщения доставлены!" if failed == 0 else "⚠️ Некоторые сообщения не доставлены"}
+"""
+        
+        await context.bot.send_message(
+            chat_id=user_id,
+            text=result_text
+        )
+        
+        logger.info(f"Mailing {mailing_id} completed: sent={sent}, failed={failed}")
+        
+    except Exception as e:
+        logger.error(f"Error executing mailing {mailing_id}: {e}", exc_info=True)
+        db.update_mailing_status(mailing_id, 'failed', str(e))
+        
+        try:
+            await context.bot.send_message(
+                chat_id=user_id,
+                text=f"❌ Ошибка при выполнении рассылки #{mailing_id}:\n{str(e)}"
+            )
+        except:
+            pass
 
 async def payment_method_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработка выбора метода оплаты"""
@@ -1866,23 +2203,35 @@ def main():
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("cancel", cancel))
     
-    # ==================== CONVERSATION HANDLERS ====================
-    
-    # ConversationHandler для подключения аккаунта
-    connect_conv = ConversationHandler(
-        entry_points=[CallbackQueryHandler(connect_account_start, pattern="^connect_account$")],
-        states={
-            PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, phone_handler)],
-            CODE: [MessageHandler(filters.TEXT & ~filters.COMMAND, code_handler)],
-            PASSWORD: [MessageHandler(filters.TEXT & ~filters.COMMAND, password_handler)]
-        },
-        fallbacks=[
-            CommandHandler("cancel", cancel_connect),
-            CallbackQueryHandler(cancel_connect, pattern="^cancel$")
+    # ==================== MAILING CONVERSATION ====================
+mailing_conv = ConversationHandler(
+    entry_points=[
+        CallbackQueryHandler(create_mailing_start, pattern='^create_mailing$')
+    ],
+    states={
+        MAILING_RECIPIENTS: [
+            MessageHandler(filters.TEXT & ~filters.COMMAND, mailing_recipients)
         ],
-        allow_reentry=True
-    )
-    application.add_handler(connect_conv)
+        MAILING_MESSAGE: [
+            MessageHandler(filters.TEXT & ~filters.COMMAND, mailing_message)
+        ],
+        MAILING_CONFIRM: [
+            CallbackQueryHandler(mailing_confirm, pattern='^confirm_mailing$'),
+            CallbackQueryHandler(mailing_cancel, pattern='^cancel_mailing$')
+        ],
+        MAILING_ACCOUNT: [
+            CallbackQueryHandler(mailing_select_account, pattern='^mailing_account_')
+        ]
+    },
+    fallbacks=[
+        CallbackQueryHandler(mailing_cancel, pattern='^cancel_mailing$'),
+        CommandHandler('cancel', mailing_cancel)
+    ],
+    per_message=False,
+    per_chat=True,
+    per_user=True,
+    allow_reentry=True
+)
     
     # ConversationHandler для создания рассылки
     mailing_conv = ConversationHandler(
