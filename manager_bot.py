@@ -2544,6 +2544,190 @@ async def admin_broadcast_message_received(update: Update, context: ContextTypes
     
     return ConversationHandler.END
 
+# ==================== ADMIN BROADCAST FUNCTIONS ====================
+
+async def admin_broadcast_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Начало админ-рассылки"""
+    query = update.callback_query
+    await query.answer()
+    
+    if query.from_user.id != ADMIN_ID:
+        await query.answer("❌ Недостаточно прав", show_alert=True)
+        return ConversationHandler.END
+    
+    text = """
+📢 **Рассылка всем пользователям**
+
+Введите текст сообщения, которое будет отправлено всем пользователям бота.
+
+⚠️ **Важно:**
+• Сообщение получат ВСЕ пользователи
+• Используйте эту функцию ответственно
+• Можно использовать Markdown форматирование
+
+Или отправьте /cancel для отмены.
+"""
+    
+    keyboard = [[InlineKeyboardButton("❌ Отмена", callback_data='cancel_broadcast')]]
+    
+    await query.message.edit_text(
+        text,
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode='Markdown'
+    )
+    
+    return ADMIN_BROADCAST_MESSAGE
+
+
+async def admin_broadcast_message_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Получено сообщение для админ-рассылки"""
+    if update.effective_user.id != ADMIN_ID:
+        return ConversationHandler.END
+    
+    message_text = update.message.text
+    
+    if not message_text or len(message_text.strip()) == 0:
+        await update.message.reply_text(
+            "❌ Сообщение не может быть пустым.\n\n"
+            "Введите текст сообщения или /cancel для отмены.",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("❌ Отмена", callback_data='cancel_broadcast')
+            ]])
+        )
+        return ADMIN_BROADCAST_MESSAGE
+    
+    # Сохраняем сообщение
+    context.user_data['broadcast_message'] = message_text
+    
+    # Получаем количество пользователей
+    all_users = db.get_all_users()
+    user_count = len(all_users)
+    
+    text = f"""
+📢 **Подтверждение рассылки**
+
+👥 Получателей: {user_count}
+
+📝 Сообщение:
+{message_text[:500]}{'...' if len(message_text) > 500 else ''}
+
+⚠️ Сообщение будет отправлено всем пользователям бота.
+
+Подтвердите отправку.
+"""
+    
+    keyboard = [
+        [InlineKeyboardButton("✅ Подтвердить отправку", callback_data='confirm_broadcast')],
+        [InlineKeyboardButton("❌ Отмена", callback_data='cancel_broadcast')]
+    ]
+    
+    await update.message.reply_text(
+        text,
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode='Markdown'
+    )
+    
+    return ADMIN_BROADCAST_CONFIRM
+
+
+async def admin_broadcast_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Подтверждение и запуск админ-рассылки"""
+    query = update.callback_query
+    await query.answer()
+    
+    if query.from_user.id != ADMIN_ID:
+        await query.answer("❌ Недостаточно прав", show_alert=True)
+        return ConversationHandler.END
+    
+    message_text = context.user_data.get('broadcast_message')
+    
+    if not message_text:
+        await query.message.edit_text(
+            "❌ Данные рассылки потеряны. Попробуйте снова.",
+            reply_markup=get_admin_panel()
+        )
+        return ConversationHandler.END
+    
+    all_users = db.get_all_users()
+    
+    await query.message.edit_text(
+        f"⏳ Запускаю рассылку...\n\n"
+        f"Пользователей: {len(all_users)}\n"
+        f"Это может занять некоторое время."
+    )
+    
+    # Запускаем рассылку в фоне
+    asyncio.create_task(execute_admin_broadcast(
+        message_text,
+        all_users,
+        query.from_user.id,
+        context
+    ))
+    
+    # Очищаем данные
+    context.user_data.pop('broadcast_message', None)
+    
+    return ConversationHandler.END
+
+
+async def admin_broadcast_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Отмена админ-рассылки"""
+    context.user_data.pop('broadcast_message', None)
+    
+    text = "❌ Рассылка отменена."
+    keyboard = get_admin_panel()
+    
+    if update.callback_query:
+        await update.callback_query.answer("Отменено")
+        await update.callback_query.message.edit_text(text, reply_markup=keyboard)
+    else:
+        await update.message.reply_text(text, reply_markup=keyboard)
+    
+    return ConversationHandler.END
+
+
+async def execute_admin_broadcast(message_text: str, users: list, admin_id: int, context: ContextTypes.DEFAULT_TYPE):
+    """Выполнение админ-рассылки"""
+    sent = 0
+    failed = 0
+    
+    for user in users:
+        try:
+            await context.bot.send_message(
+                chat_id=user['user_id'],
+                text=message_text,
+                parse_mode='Markdown'
+            )
+            sent += 1
+            
+            # Небольшая задержка чтобы не словить лимиты
+            await asyncio.sleep(0.05)
+            
+        except Exception as e:
+            failed += 1
+            logger.error(f"Failed to send broadcast to {user['user_id']}: {e}")
+    
+    # Отправляем результат админу
+    result_text = f"""
+✅ **Рассылка завершена!**
+
+📊 Статистика:
+• Отправлено: {sent}
+• Не доставлено: {failed}
+• Всего пользователей: {len(users)}
+
+{"✅ Все сообщения доставлены!" if failed == 0 else f"⚠️ {failed} сообщений не доставлено"}
+"""
+    
+    await context.bot.send_message(
+        chat_id=admin_id,
+        text=result_text,
+        parse_mode='Markdown',
+        reply_markup=get_admin_panel()
+    )
+    
+    logger.info(f"Admin broadcast completed: sent={sent}, failed={failed}")
+
 async def admin_back_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Назад к админ-панели"""
     await admin_panel_callback(update, context)
