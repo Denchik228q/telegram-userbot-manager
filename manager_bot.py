@@ -2202,81 +2202,88 @@ def main():
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("cancel", cancel))
+    application.add_handler(CommandHandler("admin", admin_panel))
     
-    # ==================== MAILING CONVERSATION ====================
-mailing_conv = ConversationHandler(
-    entry_points=[
-        CallbackQueryHandler(create_mailing_start, pattern='^create_mailing$')
-    ],
-    states={
-        MAILING_RECIPIENTS: [
-            MessageHandler(filters.TEXT & ~filters.COMMAND, mailing_recipients)
-        ],
-        MAILING_MESSAGE: [
-            MessageHandler(filters.TEXT & ~filters.COMMAND, mailing_message)
-        ],
-        MAILING_CONFIRM: [
-            CallbackQueryHandler(mailing_confirm, pattern='^confirm_mailing$'),
-            CallbackQueryHandler(mailing_cancel, pattern='^cancel_mailing$')
-        ],
-        MAILING_ACCOUNT: [
-            CallbackQueryHandler(mailing_select_account, pattern='^mailing_account_')
-        ]
-    },
-    fallbacks=[
-        CallbackQueryHandler(mailing_cancel, pattern='^cancel_mailing$'),
-        CommandHandler('cancel', mailing_cancel)
-    ],
-    per_message=False,
-    per_chat=True,
-    per_user=True,
-    allow_reentry=True
-)
+    # ==================== CONVERSATION HANDLERS ====================
     
-# ConversationHandler для создания рассылки
-mailing_conv = ConversationHandler(
-    entry_points=[
-        CallbackQueryHandler(create_mailing_callback, pattern="^create_mailing$")
-    ],
-    states={
-        MAILING_TARGETS: [MessageHandler(filters.TEXT & ~filters.COMMAND, mailing_targets_received)],
-        MAILING_ACCOUNTS: [
-            CallbackQueryHandler(toggle_account_selection, pattern="^toggle_account_"),
-            CallbackQueryHandler(continue_with_selected, pattern="^continue_with_selected$")
+    # ConversationHandler для подключения аккаунта
+    connect_conv = ConversationHandler(
+        entry_points=[
+            CallbackQueryHandler(connect_account_callback, pattern="^connect_account$")
         ],
-        MAILING_MESSAGE: [
-            MessageHandler(
-                (filters.TEXT | filters.PHOTO | filters.VIDEO | filters.Document.ALL) & ~filters.COMMAND,
-                mailing_message_received
-            )
+        states={
+            CONNECT_PHONE: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, connect_phone_received)
+            ],
+            CONNECT_CODE: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, connect_code_received)
+            ],
+            CONNECT_PASSWORD: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, connect_password_received)
+            ]
+        },
+        fallbacks=[
+            CommandHandler('cancel', cancel),
+            CallbackQueryHandler(cancel_connect_callback, pattern="^cancel_connect$")
         ],
-        MAILING_CONFIRM: [
-            CallbackQueryHandler(confirm_mailing_callback, pattern="^confirm_mailing$"),
-            CallbackQueryHandler(cancel_mailing_callback, pattern="^cancel_mailing$")
-        ]
-    },
-    fallbacks=[
-        CommandHandler('cancel', cancel),
-        CallbackQueryHandler(cancel_mailing_callback, pattern="^cancel_mailing$")
-    ],
-    allow_reentry=True
-)
-application.add_handler(mailing_conv)
+        per_message=False,
+        allow_reentry=True
+    )
+    application.add_handler(connect_conv)
     
-# ConversationHandler для админ-рассылки
-admin_broadcast_conv = ConversationHandler(
-    entry_points=[
-        CallbackQueryHandler(admin_broadcast_start, pattern="^admin_broadcast$")
-    ],
-    states={
-        ADMIN_BROADCAST_MESSAGE: [
-            MessageHandler(filters.TEXT & ~filters.COMMAND, admin_broadcast_message_received)
-        ]
-    },
-    fallbacks=[CommandHandler('cancel', cancel)]
-)
-application.add_handler(admin_broadcast_conv)
-
+    # ConversationHandler для создания рассылки
+    mailing_conv = ConversationHandler(
+        entry_points=[
+            CallbackQueryHandler(create_mailing_start, pattern='^create_mailing$')
+        ],
+        states={
+            MAILING_RECIPIENTS: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, mailing_recipients)
+            ],
+            MAILING_MESSAGE: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, mailing_message)
+            ],
+            MAILING_CONFIRM: [
+                CallbackQueryHandler(mailing_confirm, pattern='^confirm_mailing$'),
+                CallbackQueryHandler(mailing_cancel, pattern='^cancel_mailing$')
+            ],
+            MAILING_ACCOUNT: [
+                CallbackQueryHandler(mailing_select_account, pattern='^mailing_account_')
+            ]
+        },
+        fallbacks=[
+            CallbackQueryHandler(mailing_cancel, pattern='^cancel_mailing$'),
+            CommandHandler('cancel', mailing_cancel)
+        ],
+        per_message=False,
+        per_chat=True,
+        per_user=True,
+        allow_reentry=True
+    )
+    application.add_handler(mailing_conv)
+    
+    # ConversationHandler для админ-рассылки
+    admin_broadcast_conv = ConversationHandler(
+        entry_points=[
+            CallbackQueryHandler(admin_broadcast_start, pattern="^admin_broadcast$")
+        ],
+        states={
+            ADMIN_BROADCAST_MESSAGE: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, admin_broadcast_message_received)
+            ],
+            ADMIN_BROADCAST_CONFIRM: [
+                CallbackQueryHandler(admin_broadcast_confirm, pattern='^confirm_broadcast$'),
+                CallbackQueryHandler(admin_broadcast_cancel, pattern='^cancel_broadcast$')
+            ]
+        },
+        fallbacks=[
+            CommandHandler('cancel', cancel),
+            CallbackQueryHandler(admin_broadcast_cancel, pattern='^cancel_broadcast$')
+        ],
+        allow_reentry=True
+    )
+    application.add_handler(admin_broadcast_conv)
+    
     # ==================== PAYMENT HANDLERS ====================
     application.add_handler(CallbackQueryHandler(
         payment_method_callback, 
@@ -2287,16 +2294,16 @@ application.add_handler(admin_broadcast_conv)
         payment_confirmation_callback, 
         pattern='^paid_(card|crypto)_'
     ))
-
+    
     # ==================== ADMIN PAYMENT HANDLERS ====================
     application.add_handler(CallbackQueryHandler(
         approve_payment_callback, 
-        pattern='^approve_'
+        pattern='^approve_[0-9]+$'
     ))
     
     application.add_handler(CallbackQueryHandler(
         reject_payment_callback, 
-        pattern='^reject_'
+        pattern='^reject_[0-9]+$'
     ))
     
     # ==================== CALLBACK HANDLERS ====================
@@ -2304,6 +2311,7 @@ application.add_handler(admin_broadcast_conv)
     # Главное меню
     application.add_handler(CallbackQueryHandler(main_menu_callback, pattern="^main_menu$"))
     application.add_handler(CallbackQueryHandler(my_accounts_callback, pattern="^my_accounts$"))
+    application.add_handler(CallbackQueryHandler(mailings_callback, pattern="^mailings$"))
     application.add_handler(CallbackQueryHandler(scheduler_callback, pattern="^scheduler$"))
     application.add_handler(CallbackQueryHandler(history_callback, pattern="^history$"))
     application.add_handler(CallbackQueryHandler(subscriptions_callback, pattern="^subscriptions$"))
@@ -2313,17 +2321,18 @@ application.add_handler(admin_broadcast_conv)
     application.add_handler(CallbackQueryHandler(manage_accounts_callback, pattern="^manage_accounts$"))
     application.add_handler(CallbackQueryHandler(account_info_callback, pattern="^account_info_"))
     application.add_handler(CallbackQueryHandler(disconnect_account_callback, pattern="^disconnect_account_"))
+    application.add_handler(CallbackQueryHandler(confirm_disconnect_callback, pattern="^confirm_disconnect_"))
     application.add_handler(CallbackQueryHandler(accounts_back_callback, pattern="^accounts_back$"))
     
     # Подписки
     application.add_handler(CallbackQueryHandler(buy_subscription_callback, pattern="^buy_"))
-    application.add_handler(CallbackQueryHandler(payment_method_callback, pattern="^payment_"))
-    application.add_handler(CallbackQueryHandler(paid_callback, pattern="^paid_"))
     
     # Планировщик
+    application.add_handler(CallbackQueryHandler(create_schedule_callback, pattern="^create_schedule$"))
     application.add_handler(CallbackQueryHandler(list_schedules_callback, pattern="^list_schedules$"))
     application.add_handler(CallbackQueryHandler(schedule_info_callback, pattern="^schedule_info_"))
     application.add_handler(CallbackQueryHandler(delete_schedule_callback, pattern="^delete_schedule_"))
+    application.add_handler(CallbackQueryHandler(confirm_delete_schedule_callback, pattern="^confirm_delete_schedule_"))
     
     # История
     application.add_handler(CallbackQueryHandler(history_all_callback, pattern="^history_all$"))
@@ -2332,18 +2341,21 @@ application.add_handler(admin_broadcast_conv)
     # Админ панель
     application.add_handler(CallbackQueryHandler(admin_panel_callback, pattern="^admin_panel$"))
     application.add_handler(CallbackQueryHandler(admin_users_callback, pattern="^admin_users$"))
+    application.add_handler(CallbackQueryHandler(admin_user_info_callback, pattern="^admin_user_"))
     application.add_handler(CallbackQueryHandler(admin_payments_callback, pattern="^admin_payments$"))
     application.add_handler(CallbackQueryHandler(admin_payments_pending_callback, pattern="^admin_payments_pending$"))
     application.add_handler(CallbackQueryHandler(admin_stats_callback, pattern="^admin_stats$"))
     application.add_handler(CallbackQueryHandler(admin_backup_callback, pattern="^admin_backup$"))
-    application.add_handler(CallbackQueryHandler(approve_payment_callback, pattern="^approve_payment_"))
-    application.add_handler(CallbackQueryHandler(reject_payment_callback, pattern="^reject_payment_"))
+    application.add_handler(CallbackQueryHandler(create_backup_callback, pattern="^create_backup$"))
     application.add_handler(CallbackQueryHandler(admin_back_callback, pattern="^admin_back$"))
     
     # Общие
     application.add_handler(CallbackQueryHandler(back_to_menu_callback, pattern="^back_to_menu$"))
     
-    # Текстовые сообщения (последним!)
+    # Общий обработчик callback (ДОЛЖЕН БЫТЬ ПОСЛЕДНИМ!)
+    application.add_handler(CallbackQueryHandler(button_callback))
+    
+    # Текстовые сообщения
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
     
     # Обработчик ошибок
@@ -2369,6 +2381,7 @@ application.add_handler(admin_broadcast_conv)
             scheduler.shutdown()
         backup_manager.shutdown()
         logger.info("✅ Cleanup complete")
+
 
 if __name__ == '__main__':
     main()
