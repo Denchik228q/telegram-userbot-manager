@@ -116,11 +116,13 @@ def get_subscription_menu(current_plan='trial'):
     return InlineKeyboardMarkup(keyboard)
 
 def get_plan_details(plan_id):
-    """Детали тарифа с кнопкой покупки"""
+    """Детали тарифа с кнопками оплаты"""
     keyboard = [
-        [InlineKeyboardButton("💳 Купить", callback_data=f"buy_{plan_id}")],
-        [InlineKeyboardButton("◀️ Назад", callback_data="subscriptions")]
+        [InlineKeyboardButton("💳 Оплатить картой", callback_data=f'pay_card_{plan_id}')],
+        [InlineKeyboardButton("🪙 Оплатить криптой", callback_data=f'pay_crypto_{plan_id}')],
+        [InlineKeyboardButton("◀️ Назад к тарифам", callback_data='subscriptions')]
     ]
+    return InlineKeyboardMarkup(keyboard)
     
     return InlineKeyboardMarkup(keyboard)
 

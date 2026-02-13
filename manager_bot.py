@@ -926,11 +926,20 @@ async def buy_subscription_callback(update: Update, context: ContextTypes.DEFAUL
     features = '\n'.join(plan['features'])
     
     limits = plan['limits']
-    limits_text = f"""
-• Аккаунтов: {'∞' if limits['accounts'] == -1 else limits['accounts']}
-• Рассылок в день: {'∞' if limits['mailings_per_day'] == -1 else limits['mailings_per_day']}
-• Сообщений на рассылку: {'∞' if limits['messages_per_mailing'] == -1 else limits['messages_per_mailing']}
-"""
+    if limits['accounts'] == -1:
+        accounts_text = '∞ (неограниченно)'
+    else:
+        accounts_text = str(limits['accounts'])
+    
+    if limits['mailings_per_day'] == -1:
+        mailings_text = '∞ (неограниченно)'
+    else:
+        mailings_text = str(limits['mailings_per_day'])
+    
+    if limits['messages_per_mailing'] == -1:
+        messages_text = '∞ (неограниченно)'
+    else:
+        messages_text = str(limits['messages_per_mailing'])
     
     # Получаем эмодзи
     emoji_map = {
@@ -941,51 +950,54 @@ async def buy_subscription_callback(update: Update, context: ContextTypes.DEFAUL
     }
     emoji = emoji_map.get(plan_id, '💎')
     
-    # Формируем текст
-    text = f"""
-{emoji} **{plan['name']}** - {plan['price']} ₽/мес
+    # Формируем текст БЕЗ жирного шрифта для совместимости
+    text = f"""{emoji} {plan['name']} - {plan['price']} ₽/мес
 
-📋 **Описание:**
+📋 Описание:
 {plan['description']}
 
-✨ **Возможности:**
+✨ Возможности:
 {features}
 
-📊 **Лимиты:**
-{limits_text}
+📊 Лимиты:
+• Аккаунтов: {accounts_text}
+• Рассылок в день: {mailings_text}
+• Сообщений на рассылку: {messages_text}
 
-💰 **Цена:** {plan['price']} ₽
-⏱ **Период:** {plan['days']} дней
-"""
+💰 Цена: {plan['price']} ₽
+⏱ Период: {plan['days']} дней
+
+Выберите способ оплаты:"""
     
     keyboard = get_plan_details(plan_id)
     
     try:
-        # Пытаемся отредактировать сообщение
+        # Отправляем БЕЗ parse_mode для надёжности
         await query.message.edit_text(
             text, 
-            reply_markup=keyboard, 
-            parse_mode='Markdown'
+            reply_markup=keyboard
         )
         await query.answer()
     except BadRequest as e:
         error_str = str(e).lower()
         
         if "message is not modified" in error_str:
-            # Сообщение не изменилось - это нормально
+            # Сообщение не изменилось
             await query.answer()
-        elif "message to edit not found" in error_str:
-            # Сообщение было удалено, отправляем новое
-            await query.message.reply_text(
-                text,
-                reply_markup=keyboard,
-                parse_mode='Markdown'
-            )
-            await query.answer()
+        elif "message to edit not found" in error_str or "message can't be edited" in error_str:
+            # Сообщение было удалено или не может быть отредактировано
+            try:
+                await query.message.reply_text(
+                    text,
+                    reply_markup=keyboard
+                )
+                await query.answer()
+            except:
+                await query.answer("❌ Ошибка отображения", show_alert=True)
         else:
             # Другая ошибка
             logger.error(f"BadRequest in buy_subscription: {e}")
-            await query.answer("❌ Ошибка отображения", show_alert=True)
+            await query.answer("❌ Ошибка: " + str(e)[:50], show_alert=True)
     except Exception as e:
         logger.error(f"Error in buy_subscription: {e}")
         await query.answer("❌ Произошла ошибка", show_alert=True)
