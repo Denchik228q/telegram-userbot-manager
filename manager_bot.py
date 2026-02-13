@@ -2,6 +2,7 @@
 Telegram Userbot Manager Bot
 Основной файл бота
 """
+import sys
 import asyncio
 import logging
 from datetime import datetime, timedelta
