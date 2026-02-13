@@ -250,6 +250,58 @@ async def my_accounts_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     
     await safe_edit_message(query, text, reply_markup=keyboard, parse_mode='Markdown')
 
+async def mailings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Меню рассылок"""
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = query.from_user.id
+    
+    # Получаем статистику
+    user = db.get_user(user_id)
+    plan_limits = SUBSCRIPTION_PLANS[user['subscription_plan']]['limits']
+    today_mailings = db.get_today_mailings_count(user_id)
+    
+    # Получаем последние рассылки
+    mailings = db.get_user_mailings(user_id, limit=5)
+    
+    text = f"""
+📨 **Рассылки**
+
+📊 **Статистика:**
+• Тариф: {user['subscription_plan']}
+• Рассылок сегодня: {today_mailings}
+• Лимит в день: {plan_limits['mailings_per_day'] if plan_limits['mailings_per_day'] != -1 else '∞'}
+
+📋 **Последние рассылки:**
+"""
+    
+    if mailings:
+        for m in mailings:
+            status_emoji = {
+                'pending': '⏳',
+                'in_progress': '🔄',
+                'completed': '✅',
+                'failed': '❌',
+                'partial': '⚠️'
+            }.get(m['status'], '❓')
+            
+            text += f"\n{status_emoji} #{m['id']} - {m['status']} ({len(m['recipients'])} получателей)"
+    else:
+        text += "\n_Рассылок пока нет_"
+    
+    keyboard = [
+        [InlineKeyboardButton("➕ Создать рассылку", callback_data='create_mailing')],
+        [InlineKeyboardButton("📋 История рассылок", callback_data='history')],
+        [InlineKeyboardButton("◀️ Главное меню", callback_data='main_menu')]
+    ]
+    
+    await query.message.edit_text(
+        text,
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode='Markdown'
+    )
+
 async def connect_account_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Начало подключения аккаунта"""
     query = update.callback_query
@@ -508,6 +560,417 @@ async def disconnect_account_callback(update: Update, context: ContextTypes.DEFA
     
     # Возвращаемся к списку
     await manage_accounts_callback(update, context)
+
+async def connect_phone_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Получен номер телефона для подключения"""
+    user_id = update.effective_user.id
+    phone = update.message.text.strip()
+    
+    logger.info(f"User {user_id} entered phone: {phone}")
+    
+    # Проверяем формат номера
+    if not phone.startswith('+'):
+        await update.message.reply_text(
+            "❌ Неверный формат номера.\n\n"
+            "Номер должен начинаться с + и быть в международном формате.\n"
+            "Пример: +79991234567\n\n"
+            "Попробуйте ещё раз или отправьте /cancel для отмены.",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("❌ Отмена", callback_data='cancel_connect')
+            ]])
+        )
+        return CONNECT_PHONE
+    
+    # Удаляем пробелы и дефисы
+    phone = phone.replace(' ', '').replace('-', '')
+    
+    # Проверяем что после + только цифры
+    if not phone[1:].isdigit():
+        await update.message.reply_text(
+            "❌ Номер должен содержать только цифры после +\n\n"
+            "Пример: +79991234567\n\n"
+            "Попробуйте ещё раз или отправьте /cancel для отмены.",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("❌ Отмена", callback_data='cancel_connect')
+            ]])
+        )
+        return CONNECT_PHONE
+    
+    # Проверяем что аккаунт уже не подключен
+    existing = db.get_account_by_phone(phone)
+    if existing:
+        await update.message.reply_text(
+            f"❌ Этот аккаунт уже подключен.\n\n"
+            f"Номер: {phone}\n"
+            f"Владелец: {'Вы' if existing['user_id'] == user_id else 'другой пользователь'}\n\n"
+            f"Используйте другой номер или отключите существующий аккаунт.",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("◀️ Назад", callback_data='my_accounts')
+            ]])
+        )
+        return ConversationHandler.END
+    
+    # Отправляем сообщение о начале подключения
+    status_msg = await update.message.reply_text(
+        "⏳ Подключаемся к Telegram...\n\n"
+        "Это может занять несколько секунд."
+    )
+    
+    try:
+        # Создаём клиент и отправляем код
+        result = await userbot_manager.start_auth(phone, user_id)
+        
+        if result['success']:
+            # Сохраняем данные для следующего шага
+            context.user_data['connect_data'] = {
+                'phone': phone,
+                'phone_code_hash': result['phone_code_hash'],
+                'client': result['client']
+            }
+            
+            await status_msg.edit_text(
+                f"✅ Код отправлен на номер {phone}\n\n"
+                f"📱 Введите код из Telegram (5 цифр).\n\n"
+                f"Код отправлен в:\n"
+                f"• Приложение Telegram\n"
+                f"• SMS (если настроено)\n\n"
+                f"Введите код без пробелов и дефисов.\n"
+                f"Пример: 12345\n\n"
+                f"Или отправьте /cancel для отмены.",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("❌ Отмена", callback_data='cancel_connect')
+                ]])
+            )
+            
+            logger.info(f"Code sent to {phone} for user {user_id}")
+            
+            return CONNECT_CODE
+            
+        else:
+            error = result.get('error', 'Unknown error')
+            await status_msg.edit_text(
+                f"❌ Ошибка при отправке кода:\n{error}\n\n"
+                f"Попробуйте:\n"
+                f"• Проверить правильность номера\n"
+                f"• Попробовать позже\n"
+                f"• Связаться с поддержкой",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("◀️ Назад", callback_data='my_accounts')
+                ]])
+            )
+            
+            logger.error(f"Failed to send code to {phone}: {error}")
+            
+            return ConversationHandler.END
+            
+    except Exception as e:
+        logger.error(f"Error in connect_phone_received: {e}", exc_info=True)
+        
+        await status_msg.edit_text(
+            f"❌ Произошла ошибка при подключении:\n{str(e)}\n\n"
+            f"Попробуйте позже или свяжитесь с поддержкой.",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("◀️ Назад", callback_data='my_accounts')
+            ]])
+        )
+        
+        return ConversationHandler.END
+
+# ==================== ACCOUNT CONNECTION FUNCTIONS ====================
+
+async def connect_account_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Начало подключения аккаунта"""
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = query.from_user.id
+    
+    # Проверяем лимит аккаунтов
+    user = db.get_user(user_id)
+    plan_limits = SUBSCRIPTION_PLANS[user['subscription_plan']]['limits']
+    
+    current_accounts = len(db.get_user_accounts(user_id))
+    
+    if plan_limits['accounts'] != -1 and current_accounts >= plan_limits['accounts']:
+        await query.message.edit_text(
+            f"❌ Вы достигли лимита подключённых аккаунтов.\n\n"
+            f"Ваш тариф: {user['subscription_plan']}\n"
+            f"Лимит: {plan_limits['accounts']} аккаунтов\n"
+            f"Подключено: {current_accounts}\n\n"
+            f"Обновите тариф для подключения большего количества аккаунтов.",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("💎 Улучшить тариф", callback_data='subscriptions')
+            ], [
+                InlineKeyboardButton("◀️ Назад", callback_data='my_accounts')
+            ]])
+        )
+        return ConversationHandler.END
+    
+    text = """
+📱 Подключение аккаунта
+
+Для подключения Telegram-аккаунта введите номер телефона в международном формате.
+
+Примеры:
+• +79991234567
+• +380991234567
+• +77012345678
+
+⚠️ Важно:
+• Используйте формат с +
+• Убедитесь, что у вас есть доступ к этому номеру
+• Вам придёт код подтверждения в Telegram
+
+Введите номер телефона или /cancel для отмены:
+"""
+    
+    keyboard = [[InlineKeyboardButton("❌ Отмена", callback_data='cancel_connect')]]
+    
+    await query.message.edit_text(
+        text,
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+    
+    logger.info(f"User {user_id} started account connection")
+    
+    return CONNECT_PHONE
+
+
+async def cancel_connect_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Отмена подключения аккаунта через callback"""
+    query = update.callback_query
+    await query.answer("Отменено")
+    
+    # Очищаем временные данные
+    if 'connect_data' in context.user_data:
+        # Отключаем клиент если был создан
+        if 'client' in context.user_data['connect_data']:
+            try:
+                await context.user_data['connect_data']['client'].disconnect()
+            except:
+                pass
+        context.user_data.pop('connect_data', None)
+    
+    text = "❌ Подключение аккаунта отменено."
+    keyboard = get_main_menu()
+    
+    await query.message.edit_text(text, reply_markup=keyboard)
+    
+    return ConversationHandler.END
+
+
+async def connect_code_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Получен код подтверждения"""
+    user_id = update.effective_user.id
+    code = update.message.text.strip().replace(' ', '').replace('-', '')
+    
+    logger.info(f"User {user_id} entered code")
+    
+    # Проверяем что код - это цифры
+    if not code.isdigit():
+        await update.message.reply_text(
+            "❌ Код должен содержать только цифры.\n\n"
+            "Введите код из Telegram (обычно 5 цифр).\n"
+            "Пример: 12345\n\n"
+            "Или отправьте /cancel для отмены.",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("❌ Отмена", callback_data='cancel_connect')
+            ]])
+        )
+        return CONNECT_CODE
+    
+    connect_data = context.user_data.get('connect_data')
+    if not connect_data:
+        await update.message.reply_text(
+            "❌ Данные подключения потеряны.\n\n"
+            "Начните процесс подключения заново.",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("◀️ Назад", callback_data='my_accounts')
+            ]])
+        )
+        return ConversationHandler.END
+    
+    status_msg = await update.message.reply_text(
+        "⏳ Проверяем код..."
+    )
+    
+    try:
+        # Пытаемся войти с кодом
+        result = await userbot_manager.sign_in(
+            connect_data['client'],
+            connect_data['phone'],
+            code,
+            connect_data['phone_code_hash']
+        )
+        
+        if result['success']:
+            # Успешно вошли
+            phone = connect_data['phone']
+            
+            # Сохраняем аккаунт в БД
+            account_id = db.add_account(
+                user_id=user_id,
+                phone=phone,
+                session_string=result['session_string']
+            )
+            
+            # Загружаем клиент
+            await userbot_manager.load_client(account_id)
+            
+            await status_msg.edit_text(
+                f"✅ Аккаунт успешно подключён!\n\n"
+                f"📱 Номер: {phone}\n\n"
+                f"Теперь вы можете использовать этот аккаунт для рассылок.",
+                reply_markup=get_main_menu()
+            )
+            
+            logger.info(f"✅ Account connected: {phone} for user {user_id}")
+            
+            # Очищаем временные данные
+            context.user_data.pop('connect_data', None)
+            
+            return ConversationHandler.END
+            
+        elif result.get('password_required'):
+            # Нужен пароль 2FA
+            await status_msg.edit_text(
+                "🔐 Требуется пароль двухфакторной аутентификации\n\n"
+                "Введите пароль от облачного хранилища Telegram (2FA).\n\n"
+                "Это пароль, который вы установили в настройках приватности.\n\n"
+                "Или отправьте /cancel для отмены.",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("❌ Отмена", callback_data='cancel_connect')
+                ]])
+            )
+            
+            logger.info(f"Password required for {connect_data['phone']}")
+            
+            return CONNECT_PASSWORD
+            
+        else:
+            # Ошибка входа
+            error = result.get('error', 'Неверный код')
+            await status_msg.edit_text(
+                f"❌ {error}\n\n"
+                f"Попробуйте:\n"
+                f"• Проверить правильность кода\n"
+                f"• Запросить новый код (/cancel и начать заново)\n"
+                f"• Проверить, не истёк ли срок действия кода",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("❌ Отмена", callback_data='cancel_connect')
+                ]])
+            )
+            
+            logger.error(f"Failed to sign in with code: {error}")
+            
+            return CONNECT_CODE
+            
+    except Exception as e:
+        logger.error(f"Error in connect_code_received: {e}", exc_info=True)
+        
+        await status_msg.edit_text(
+            f"❌ Ошибка при проверке кода:\n{str(e)}\n\n"
+            "Попробуйте ещё раз или начните процесс заново (/cancel).",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("❌ Отмена", callback_data='cancel_connect')
+            ]])
+        )
+        
+        return CONNECT_CODE
+
+
+async def connect_password_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Получен пароль 2FA"""
+    user_id = update.effective_user.id
+    password = update.message.text.strip()
+    
+    logger.info(f"User {user_id} entered 2FA password")
+    
+    # Удаляем сообщение с паролем для безопасности
+    try:
+        await update.message.delete()
+    except:
+        pass
+    
+    connect_data = context.user_data.get('connect_data')
+    if not connect_data:
+        await context.bot.send_message(
+            chat_id=user_id,
+            text="❌ Данные подключения потеряны.\n\nНачните процесс подключения заново.",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("◀️ Назад", callback_data='my_accounts')
+            ]])
+        )
+        return ConversationHandler.END
+    
+    status_msg = await context.bot.send_message(
+        chat_id=user_id,
+        text="⏳ Проверяем пароль..."
+    )
+    
+    try:
+        # Пытаемся войти с паролем
+        result = await userbot_manager.check_password(
+            connect_data['client'],
+            password
+        )
+        
+        if result['success']:
+            # Успешно вошли
+            phone = connect_data['phone']
+            
+            # Сохраняем аккаунт в БД
+            account_id = db.add_account(
+                user_id=user_id,
+                phone=phone,
+                session_string=result['session_string']
+            )
+            
+            # Загружаем клиент
+            await userbot_manager.load_client(account_id)
+            
+            await status_msg.edit_text(
+                f"✅ Аккаунт успешно подключён!\n\n"
+                f"📱 Номер: {phone}\n\n"
+                f"Теперь вы можете использовать этот аккаунт для рассылок.",
+                reply_markup=get_main_menu()
+            )
+            
+            logger.info(f"✅ Account connected with 2FA: {phone} for user {user_id}")
+            
+            # Очищаем временные данные
+            context.user_data.pop('connect_data', None)
+            
+            return ConversationHandler.END
+            
+        else:
+            # Неверный пароль
+            error = result.get('error', 'Неверный пароль')
+            await status_msg.edit_text(
+                f"❌ {error}\n\n"
+                f"Попробуйте ещё раз ввести пароль от облачного хранилища.\n\n"
+                f"Или отправьте /cancel для отмены.",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("❌ Отмена", callback_data='cancel_connect')
+                ]])
+            )
+            
+            logger.error(f"Failed to sign in with password: {error}")
+            
+            return CONNECT_PASSWORD
+            
+    except Exception as e:
+        logger.error(f"Error in connect_password_received: {e}", exc_info=True)
+        
+        await status_msg.edit_text(
+            f"❌ Ошибка при проверке пароля:\n{str(e)}\n\n"
+            "Попробуйте ещё раз или начните процесс заново (/cancel).",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("❌ Отмена", callback_data='cancel_connect')
+            ]])
+        )
+        
+        return CONNECT_PASSWORD
 
 async def accounts_back_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Назад к списку аккаунтов"""
