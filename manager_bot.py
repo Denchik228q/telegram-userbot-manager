@@ -3000,7 +3000,7 @@ def main():
     application.add_handler(CallbackQueryHandler(back_to_menu_callback, pattern="^back_to_menu$"))
     
     # Общий обработчик callback (ДОЛЖЕН БЫТЬ ПОСЛЕДНИМ!)
-    application.add_handler(CallbackQueryHandler(button_callback))
+    #application.add_handler(CallbackQueryHandler(button_callback))
     
     # Текстовые сообщения
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
