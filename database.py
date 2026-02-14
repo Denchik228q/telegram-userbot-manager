@@ -20,6 +20,78 @@ class Database:
         self._create_tables()
         logger.info("✅ Database initialized successfully")
 
+    def _create_tables(self):
+        """Создание таблиц в БД"""
+        # Таблица пользователей
+        self.cursor.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                user_id INTEGER PRIMARY KEY,
+                username TEXT,
+                first_name TEXT,
+                last_name TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                is_admin BOOLEAN DEFAULT 0,
+                is_active BOOLEAN DEFAULT 1,
+                subscription_end TIMESTAMP,
+                messages_sent INTEGER DEFAULT 0,
+                last_activity TIMESTAMP
+            )
+        """)
+
+        # Таблица аккаунтов
+        self.cursor.execute("""
+            CREATE TABLE IF NOT EXISTS accounts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                phone TEXT UNIQUE,
+                session_string TEXT,
+                api_id INTEGER,
+                api_hash TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                is_active BOOLEAN DEFAULT 1,
+                last_used TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(user_id)
+            )
+        """)
+
+        # Таблица рассылок
+        self.cursor.execute("""
+            CREATE TABLE IF NOT EXISTS mailings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                account_id INTEGER,
+                message TEXT,
+                recipients TEXT,
+                status TEXT DEFAULT 'pending',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                started_at TIMESTAMP,
+                completed_at TIMESTAMP,
+                total_recipients INTEGER DEFAULT 0,
+                sent_count INTEGER DEFAULT 0,
+                failed_count INTEGER DEFAULT 0,
+                FOREIGN KEY (user_id) REFERENCES users(user_id),
+                FOREIGN KEY (account_id) REFERENCES accounts(id)
+            )
+        """)
+
+        # Таблица расписаний
+        self.cursor.execute("""
+            CREATE TABLE IF NOT EXISTS schedules (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                account_id INTEGER,
+                message TEXT,
+                recipients TEXT,
+                schedule_time TEXT,
+                is_active BOOLEAN DEFAULT 1,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(user_id),
+                FOREIGN KEY (account_id) REFERENCES accounts(id)
+            )
+        """)
+
+        self.conn.commit()
+
     async def start_auth(self, phone: str, user_id: int) -> Dict:
         """Начать авторизацию Telegram аккаунта"""
         try:
