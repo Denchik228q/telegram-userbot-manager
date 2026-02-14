@@ -12,10 +12,12 @@ import threading
 logger = logging.getLogger(__name__)
 
 class Database:
-    def __init__(self):
-        self.db_path = DATABASE_URL
-        self._local = threading.local()
-        self.init_database()
+    def __init__(self, db_path: str = "bot_data.db"):
+        """Инициализация базы данных"""
+        self.db_path = db_path
+        self.conn = sqlite3.connect(db_path, check_same_thread=False)
+        self.cursor = self.conn.cursor()  # <- ЭТА СТРОКА ОБЯЗАТЕЛЬНА!
+        self._create_tables()
         logger.info("✅ Database initialized successfully")
     
     def _get_connection(self):
