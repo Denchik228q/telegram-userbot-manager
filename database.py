@@ -299,6 +299,33 @@ class Database:
             cursor.execute('SELECT * FROM accounts WHERE id = ?', (account_id,))
             row = cursor.fetchone()
             return dict(row) if row else None
+
+    def get_account_by_phone(self, phone: str) -> Optional[Dict]:
+        """Получить аккаунт по номеру телефона"""
+        try:
+            self.cursor.execute("""
+                SELECT * FROM accounts 
+                WHERE phone = ?
+            """, (phone,))
+        
+            row = self.cursor.fetchone()
+            if row:
+                return {
+                    'id': row[0],
+                    'user_id': row[1],
+                    'phone': row[2],
+                    'session_string': row[3],
+                    'api_id': row[4],
+                    'api_hash': row[5],
+                    'created_at': row[6],
+                    'is_active': row[7],
+                    'last_used': row[8]
+                }
+            return None
+        
+        except Exception as e:
+            logger.error(f"Error getting account by phone: {e}")
+            return None
     
     def update_account(self, account_id, **kwargs):
         """Обновить аккаунт"""
