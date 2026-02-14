@@ -2988,7 +2988,7 @@ def main():
     # Админ панель
     application.add_handler(CallbackQueryHandler(admin_panel_callback, pattern="^admin_panel$"))
     application.add_handler(CallbackQueryHandler(admin_users_callback, pattern="^admin_users$"))
-    application.add_handler(CallbackQueryHandler(admin_user_info_callback, pattern="^admin_user_"))
+    #application.add_handler(CallbackQueryHandler(admin_user_info_callback, pattern="^admin_user_"))
     application.add_handler(CallbackQueryHandler(admin_payments_callback, pattern="^admin_payments$"))
     application.add_handler(CallbackQueryHandler(admin_payments_pending_callback, pattern="^admin_payments_pending$"))
     application.add_handler(CallbackQueryHandler(admin_stats_callback, pattern="^admin_stats$"))
