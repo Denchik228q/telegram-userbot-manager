@@ -2975,7 +2975,7 @@ def main():
     application.add_handler(CallbackQueryHandler(buy_subscription_callback, pattern="^buy_"))
     
     # Планировщик
-    application.add_handler(CallbackQueryHandler(create_schedule_callback, pattern="^create_schedule$"))
+    #application.add_handler(CallbackQueryHandler(create_schedule_callback, pattern="^create_schedule$"))
     application.add_handler(CallbackQueryHandler(list_schedules_callback, pattern="^list_schedules$"))
     application.add_handler(CallbackQueryHandler(schedule_info_callback, pattern="^schedule_info_"))
     application.add_handler(CallbackQueryHandler(delete_schedule_callback, pattern="^delete_schedule_"))
