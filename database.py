@@ -7,7 +7,6 @@ from typing import Optional, List, Dict
 from datetime import datetime, timedelta
 from contextlib import contextmanager
 from config import DATABASE_URL
-import threading
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +22,7 @@ class Database:
     def _create_tables(self):
         """Создание таблиц в БД"""
         # Таблица пользователей
-        self.cursor.execute("""
+        self.self.cursor.execute("""
             CREATE TABLE IF NOT EXISTS users (
                 user_id INTEGER PRIMARY KEY,
                 username TEXT,
@@ -39,7 +38,7 @@ class Database:
         """)
 
         # Таблица аккаунтов
-        self.cursor.execute("""
+        self.self.cursor.execute("""
             CREATE TABLE IF NOT EXISTS accounts (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER,
@@ -55,7 +54,7 @@ class Database:
         """)
 
         # Таблица рассылок
-        self.cursor.execute("""
+        self.self.cursor.execute("""
             CREATE TABLE IF NOT EXISTS mailings (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER,
@@ -75,7 +74,7 @@ class Database:
         """)
 
         # Таблица расписаний
-        self.cursor.execute("""
+        self.self.cursor.execute("""
             CREATE TABLE IF NOT EXISTS schedules (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER,
@@ -90,7 +89,7 @@ class Database:
             )
         """)
 
-        self.conn.commit()
+        self.self.conn.commit()
 
     async def start_auth(self, phone: str, user_id: int) -> Dict:
         """Начать авторизацию Telegram аккаунта"""
@@ -180,44 +179,12 @@ class Database:
                 'error': str(e)
             }
     
-    def _get_connection(self):
-        """Получить connection для текущего потока"""
-        if not hasattr(self._local, 'connection') or self._local.connection is None:
-            self._local.connection = sqlite3.connect(
-                self.db_path,
-                timeout=30.0,  # Увеличенный таймаут
-                check_same_thread=False
-            )
-            self._local.connection.row_factory = sqlite3.Row
-            # Включаем WAL режим
-            self._local.connection.execute('PRAGMA journal_mode=WAL')
-            self._local.connection.execute('PRAGMA busy_timeout=30000')
-            self._local.connection.execute('PRAGMA synchronous=NORMAL')
-        return self._local.connection
-    
-    @contextmanager
-    def get_connection(self):
-        """Context manager для работы с БД"""
-        conn = self._get_connection()
-        try:
-            yield conn
-            conn.commit()
-        except sqlite3.OperationalError as e:
-            conn.rollback()
-            logger.error(f"Database error: {e}")
-            raise
-        except Exception as e:
-            conn.rollback()
-            logger.error(f"Unexpected database error: {e}")
-            raise
-    
     def init_database(self):
         """Инициализация базы данных"""
-        with self.get_connection() as conn:
-            cursor = conn.cursor()
+        # Using direct connection
             
             # Таблица пользователей
-            cursor.execute('''
+            self.cursor.execute('''
                 CREATE TABLE IF NOT EXISTS users (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     telegram_id INTEGER UNIQUE NOT NULL,
@@ -233,7 +200,7 @@ class Database:
             ''')
             
             # Таблица аккаунтов
-            cursor.execute('''
+            self.cursor.execute('''
                 CREATE TABLE IF NOT EXISTS accounts (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     user_id INTEGER NOT NULL,
@@ -250,7 +217,7 @@ class Database:
             ''')
             
             # Таблица рассылок
-            cursor.execute('''
+            self.cursor.execute('''
                 CREATE TABLE IF NOT EXISTS mailings (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     user_id INTEGER NOT NULL,
@@ -271,7 +238,7 @@ class Database:
             ''')
             
             # Таблица расписаний
-            cursor.execute('''
+            self.cursor.execute('''
                 CREATE TABLE IF NOT EXISTS schedules (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     user_id INTEGER NOT NULL,
@@ -288,7 +255,7 @@ class Database:
             ''')
             
             # Таблица платежей
-            cursor.execute('''
+            self.cursor.execute('''
                 CREATE TABLE IF NOT EXISTS payments (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     user_id INTEGER NOT NULL,
@@ -305,7 +272,7 @@ class Database:
             ''')
             
             # Таблица логов
-            cursor.execute('''
+            self.cursor.execute('''
                 CREATE TABLE IF NOT EXISTS logs (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     user_id INTEGER,
@@ -317,28 +284,35 @@ class Database:
             ''')
             
             # Индексы для оптимизации
-            cursor.execute('CREATE INDEX IF NOT EXISTS idx_users_telegram_id ON users(telegram_id)')
-            cursor.execute('CREATE INDEX IF NOT EXISTS idx_accounts_user_id ON accounts(user_id)')
-            cursor.execute('CREATE INDEX IF NOT EXISTS idx_mailings_user_id ON mailings(user_id)')
-            cursor.execute('CREATE INDEX IF NOT EXISTS idx_mailings_status ON mailings(status)')
-            cursor.execute('CREATE INDEX IF NOT EXISTS idx_payments_user_id ON payments(user_id)')
-            cursor.execute('CREATE INDEX IF NOT EXISTS idx_payments_status ON payments(status)')
-            cursor.execute('CREATE INDEX IF NOT EXISTS idx_logs_user_id ON logs(user_id)')
+            self.cursor.execute('CREATE INDEX IF NOT EXISTS idx_users_telegram_id ON users(telegram_id)')
+            self.cursor.execute('CREATE INDEX IF NOT EXISTS idx_accounts_user_id ON accounts(user_id)')
+            self.cursor.execute('CREATE INDEX IF NOT EXISTS idx_mailings_user_id ON mailings(user_id)')
+            self.cursor.execute('CREATE INDEX IF NOT EXISTS idx_mailings_status ON mailings(status)')
+            self.cursor.execute('CREATE INDEX IF NOT EXISTS idx_payments_user_id ON payments(user_id)')
+            self.cursor.execute('CREATE INDEX IF NOT EXISTS idx_payments_status ON payments(status)')
+            self.cursor.execute('CREATE INDEX IF NOT EXISTS idx_logs_user_id ON logs(user_id)')
     
     # ==================== USERS ====================
     
-    def create_user(self, telegram_id, username=None, first_name=None, last_name=None):
-        """Создать или обновить пользователя"""
-        with self.get_connection() as conn:
-            cursor = conn.cursor()
+    def create_user(self, user_id: int, username: str = None, first_name: str = None, last_name: str = None):
+        """Создать нового пользователя"""
+        try:
+            self.self.cursor.execute("""
+                INSERT INTO users (user_id, username, first_name, last_name, last_activity)
+                VALUES (?, ?, ?, ?, ?)
+            """, (user_id, username, first_name, last_name, datetime.now()))
+            self.self.conn.commit()
+            logger.info(f"✅ New user created: {user_id}")
+        except sqlite3.IntegrityError:
+            logger.warning(f"User {user_id} already exists")
             
             # Проверяем существует ли пользователь
-            cursor.execute('SELECT id FROM users WHERE telegram_id = ?', (telegram_id,))
-            exists = cursor.fetchone()
+            self.cursor.execute('SELECT id FROM users WHERE telegram_id = ?', (telegram_id,))
+            exists = self.cursor.fetchone()
             
             if exists:
                 # Обновляем информацию
-                cursor.execute('''
+                self.cursor.execute('''
                     UPDATE users 
                     SET username = ?, first_name = ?, last_name = ?, last_active = CURRENT_TIMESTAMP
                     WHERE telegram_id = ?
@@ -347,14 +321,14 @@ class Database:
             else:
                 # Создаём нового пользователя с trial подпиской на 7 дней
                 expires = datetime.now() + timedelta(days=7)
-                cursor.execute('''
+                self.cursor.execute('''
                     INSERT INTO users (telegram_id, username, first_name, last_name, subscription_plan, subscription_expires)
                     VALUES (?, ?, ?, ?, 'trial', ?)
                 ''', (telegram_id, username, first_name, last_name, expires))
                 
                 # Логируем БЕЗ вызова add_log (избегаем рекурсии)
                 try:
-                    cursor.execute('''
+                    self.cursor.execute('''
                         INSERT INTO logs (user_id, action, details)
                         VALUES (?, 'user_registered', ?)
                     ''', (telegram_id, f'New user: {username or telegram_id}'))
@@ -366,35 +340,32 @@ class Database:
     
     def get_user(self, telegram_id):
         """Получить пользователя"""
-        with self.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('SELECT * FROM users WHERE telegram_id = ?', (telegram_id,))
-            row = cursor.fetchone()
+        # Using direct connection
+            self.cursor.execute('SELECT * FROM users WHERE telegram_id = ?', (telegram_id,))
+            row = self.cursor.fetchone()
             return dict(row) if row else None
     
     def get_all_users(self, active_only=False):
         """Получить всех пользователей"""
-        with self.get_connection() as conn:
-            cursor = conn.cursor()
+        # Using direct connection
             query = 'SELECT * FROM users'
             if active_only:
                 query += ' WHERE is_banned = 0'
-            cursor.execute(query)
-            return [dict(row) for row in cursor.fetchall()]
+            self.cursor.execute(query)
+            return [dict(row) for row in self.cursor.fetchall()]
     
     def update_user_subscription(self, telegram_id, plan, days):
         """Обновить подписку пользователя"""
-        with self.get_connection() as conn:
-            cursor = conn.cursor()
+        # Using direct connection
             expires = datetime.now() + timedelta(days=days)
-            cursor.execute('''
+            self.cursor.execute('''
                 UPDATE users 
                 SET subscription_plan = ?, subscription_expires = ?
                 WHERE telegram_id = ?
             ''', (plan, expires, telegram_id))
             
             try:
-                cursor.execute('''
+                self.cursor.execute('''
                     INSERT INTO logs (user_id, action, details)
                     VALUES (?, 'subscription_updated', ?)
                 ''', (telegram_id, f'Plan: {plan}, Days: {days}'))
@@ -405,34 +376,31 @@ class Database:
     
     def ban_user(self, telegram_id):
         """Забанить пользователя"""
-        with self.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('UPDATE users SET is_banned = 1 WHERE telegram_id = ?', (telegram_id,))
+        # Using direct connection
+            self.cursor.execute('UPDATE users SET is_banned = 1 WHERE telegram_id = ?', (telegram_id,))
             logger.info(f"🚫 User {telegram_id} banned")
     
     def unban_user(self, telegram_id):
         """Разбанить пользователя"""
-        with self.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('UPDATE users SET is_banned = 0 WHERE telegram_id = ?', (telegram_id,))
+        # Using direct connection
+            self.cursor.execute('UPDATE users SET is_banned = 0 WHERE telegram_id = ?', (telegram_id,))
             logger.info(f"✅ User {telegram_id} unbanned")
     
     # ==================== ACCOUNTS ====================
     
     def add_account(self, user_id, phone, session_string, name=None, username=None):
         """Добавить аккаунт"""
-        with self.get_connection() as conn:
-            cursor = conn.cursor()
+        # Using direct connection
             try:
-                cursor.execute('''
+                self.cursor.execute('''
                     INSERT INTO accounts (user_id, phone, name, username, session_string)
                     VALUES (?, ?, ?, ?, ?)
                 ''', (user_id, phone, name, username, session_string))
                 
-                account_id = cursor.lastrowid
+                account_id = self.cursor.lastrowid
                 
                 try:
-                    cursor.execute('''
+                    self.cursor.execute('''
                         INSERT INTO logs (user_id, action, details)
                         VALUES (?, 'account_added', ?)
                     ''', (user_id, f'Phone: {phone}'))
@@ -447,31 +415,29 @@ class Database:
     
     def get_user_accounts(self, user_id, active_only=True):
         """Получить аккаунты пользователя"""
-        with self.get_connection() as conn:
-            cursor = conn.cursor()
+        # Using direct connection
             query = 'SELECT * FROM accounts WHERE user_id = ?'
             if active_only:
                 query += ' AND is_active = 1'
-            cursor.execute(query, (user_id,))
-            return [dict(row) for row in cursor.fetchall()]
+            self.cursor.execute(query, (user_id,))
+            return [dict(row) for row in self.cursor.fetchall()]
     
     def get_account(self, account_id):
         """Получить аккаунт по ID"""
-        with self.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('SELECT * FROM accounts WHERE id = ?', (account_id,))
-            row = cursor.fetchone()
+        # Using direct connection
+            self.cursor.execute('SELECT * FROM accounts WHERE id = ?', (account_id,))
+            row = self.cursor.fetchone()
             return dict(row) if row else None
 
     def get_account_by_phone(self, phone: str) -> Optional[Dict]:
         """Получить аккаунт по номеру телефона"""
         try:
-            self.cursor.execute("""
+            self.self.cursor.execute("""
                 SELECT * FROM accounts 
                 WHERE phone = ?
             """, (phone,))
         
-            row = self.cursor.fetchone()
+            row = self.self.cursor.fetchone()
             if row:
                 return {
                     'id': row[0],
@@ -492,8 +458,7 @@ class Database:
     
     def update_account(self, account_id, **kwargs):
         """Обновить аккаунт"""
-        with self.get_connection() as conn:
-            cursor = conn.cursor()
+        # Using direct connection
             
             allowed_fields = ['name', 'username', 'is_active', 'last_used', 'session_string']
             updates = []
@@ -507,16 +472,15 @@ class Database:
             if updates:
                 values.append(account_id)
                 query = f"UPDATE accounts SET {', '.join(updates)} WHERE id = ?"
-                cursor.execute(query, values)
+                self.cursor.execute(query, values)
     
     def delete_account(self, account_id, user_id):
         """Удалить аккаунт"""
-        with self.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('DELETE FROM accounts WHERE id = ? AND user_id = ?', (account_id, user_id))
+        # Using direct connection
+            self.cursor.execute('DELETE FROM accounts WHERE id = ? AND user_id = ?', (account_id, user_id))
             
             try:
-                cursor.execute('''
+                self.cursor.execute('''
                     INSERT INTO logs (user_id, action, details)
                     VALUES (?, 'account_deleted', ?)
                 ''', (user_id, f'Account ID: {account_id}'))
@@ -527,31 +491,29 @@ class Database:
     
     def count_user_accounts(self, user_id):
         """Подсчитать количество аккаунтов пользователя"""
-        with self.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('SELECT COUNT(*) as count FROM accounts WHERE user_id = ? AND is_active = 1', (user_id,))
-            return cursor.fetchone()['count']
+        # Using direct connection
+            self.cursor.execute('SELECT COUNT(*) as count FROM accounts WHERE user_id = ? AND is_active = 1', (user_id,))
+            return self.cursor.fetchone()['count']
     
     # ==================== MAILINGS ====================
     
     def create_mailing(self, user_id, message_text, targets, accounts, message_type='text', media_path=None):
         """Создать рассылку"""
-        with self.get_connection() as conn:
-            cursor = conn.cursor()
+        # Using direct connection
             
             import json
             targets_json = json.dumps(targets)
             accounts_json = json.dumps(accounts)
             
-            cursor.execute('''
+            self.cursor.execute('''
                 INSERT INTO mailings (user_id, message_text, message_type, media_path, targets, accounts, total)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
             ''', (user_id, message_text, message_type, media_path, targets_json, accounts_json, len(targets)))
             
-            mailing_id = cursor.lastrowid
+            mailing_id = self.cursor.lastrowid
             
             try:
-                cursor.execute('''
+                self.cursor.execute('''
                     INSERT INTO logs (user_id, action, details)
                     VALUES (?, 'mailing_created', ?)
                 ''', (user_id, f'Mailing ID: {mailing_id}, Targets: {len(targets)}'))
@@ -563,10 +525,9 @@ class Database:
     
     def get_mailing(self, mailing_id):
         """Получить рассылку по ID"""
-        with self.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('SELECT * FROM mailings WHERE id = ?', (mailing_id,))
-            row = cursor.fetchone()
+        # Using direct connection
+            self.cursor.execute('SELECT * FROM mailings WHERE id = ?', (mailing_id,))
+            row = self.cursor.fetchone()
             if row:
                 data = dict(row)
                 import json
@@ -577,9 +538,8 @@ class Database:
     
     def get_user_mailings(self, user_id, limit=50):
         """Получить рассылки пользователя"""
-        with self.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('''
+        # Using direct connection
+            self.cursor.execute('''
                 SELECT * FROM mailings 
                 WHERE user_id = ? 
                 ORDER BY created_at DESC 
@@ -588,7 +548,7 @@ class Database:
             
             mailings = []
             import json
-            for row in cursor.fetchall():
+            for row in self.cursor.fetchall():
                 data = dict(row)
                 data['targets'] = json.loads(data['targets'])
                 data['accounts'] = json.loads(data['accounts'])
@@ -597,8 +557,7 @@ class Database:
     
     def update_mailing(self, mailing_id, **kwargs):
         """Обновить рассылку"""
-        with self.get_connection() as conn:
-            cursor = conn.cursor()
+        # Using direct connection
             
             allowed_fields = ['status', 'sent', 'errors', 'started_at', 'completed_at']
             updates = []
@@ -612,39 +571,37 @@ class Database:
             if updates:
                 values.append(mailing_id)
                 query = f"UPDATE mailings SET {', '.join(updates)} WHERE id = ?"
-                cursor.execute(query, values)
+                self.cursor.execute(query, values)
     
     def count_user_mailings_today(self, user_id):
         """Подсчитать количество рассылок пользователя сегодня"""
-        with self.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('''
+        # Using direct connection
+            self.cursor.execute('''
                 SELECT COUNT(*) as count 
                 FROM mailings 
                 WHERE user_id = ? 
                 AND DATE(created_at) = DATE('now')
             ''', (user_id,))
-            return cursor.fetchone()['count']
+            return self.cursor.fetchone()['count']
     
     # ==================== SCHEDULES ====================
     
     def create_schedule(self, user_id, name, mailing_config, schedule_type, schedule_time):
         """Создать расписание"""
-        with self.get_connection() as conn:
-            cursor = conn.cursor()
+        # Using direct connection
             
             import json
             config_json = json.dumps(mailing_config)
             
-            cursor.execute('''
+            self.cursor.execute('''
                 INSERT INTO schedules (user_id, name, mailing_config, schedule_type, schedule_time)
                 VALUES (?, ?, ?, ?, ?)
             ''', (user_id, name, config_json, schedule_type, schedule_time))
             
-            schedule_id = cursor.lastrowid
+            schedule_id = self.cursor.lastrowid
             
             try:
-                cursor.execute('''
+                self.cursor.execute('''
                     INSERT INTO logs (user_id, action, details)
                     VALUES (?, 'schedule_created', ?)
                 ''', (user_id, f'Schedule ID: {schedule_id}'))
@@ -656,10 +613,9 @@ class Database:
     
     def get_schedule(self, schedule_id):
         """Получить расписание по ID"""
-        with self.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('SELECT * FROM schedules WHERE id = ?', (schedule_id,))
-            row = cursor.fetchone()
+        # Using direct connection
+            self.cursor.execute('SELECT * FROM schedules WHERE id = ?', (schedule_id,))
+            row = self.cursor.fetchone()
             if row:
                 data = dict(row)
                 import json
@@ -669,17 +625,16 @@ class Database:
     
     def get_user_schedules(self, user_id, active_only=True):
         """Получить расписания пользователя"""
-        with self.get_connection() as conn:
-            cursor = conn.cursor()
+        # Using direct connection
             query = 'SELECT * FROM schedules WHERE user_id = ?'
             if active_only:
                 query += ' AND is_active = 1'
             query += ' ORDER BY created_at DESC'
-            cursor.execute(query, (user_id,))
+            self.cursor.execute(query, (user_id,))
             
             schedules = []
             import json
-            for row in cursor.fetchall():
+            for row in self.cursor.fetchall():
                 data = dict(row)
                 data['mailing_config'] = json.loads(data['mailing_config'])
                 schedules.append(data)
@@ -687,9 +642,8 @@ class Database:
     
     def get_active_schedules(self):
         """Получить все активные расписания"""
-        with self.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('''
+        # Using direct connection
+            self.cursor.execute('''
                 SELECT * FROM schedules 
                 WHERE is_active = 1 
                 AND (next_run IS NULL OR next_run <= CURRENT_TIMESTAMP)
@@ -697,7 +651,7 @@ class Database:
             
             schedules = []
             import json
-            for row in cursor.fetchall():
+            for row in self.cursor.fetchall():
                 data = dict(row)
                 data['mailing_config'] = json.loads(data['mailing_config'])
                 schedules.append(data)
@@ -705,8 +659,7 @@ class Database:
     
     def update_schedule(self, schedule_id, **kwargs):
         """Обновить расписание"""
-        with self.get_connection() as conn:
-            cursor = conn.cursor()
+        # Using direct connection
             
             allowed_fields = ['name', 'is_active', 'last_run', 'next_run', 'mailing_config']
             updates = []
@@ -723,16 +676,15 @@ class Database:
             if updates:
                 values.append(schedule_id)
                 query = f"UPDATE schedules SET {', '.join(updates)} WHERE id = ?"
-                cursor.execute(query, values)
+                self.cursor.execute(query, values)
     
     def delete_schedule(self, schedule_id, user_id):
         """Удалить расписание"""
-        with self.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('DELETE FROM schedules WHERE id = ? AND user_id = ?', (schedule_id, user_id))
+        # Using direct connection
+            self.cursor.execute('DELETE FROM schedules WHERE id = ? AND user_id = ?', (schedule_id, user_id))
             
             try:
-                cursor.execute('''
+                self.cursor.execute('''
                     INSERT INTO logs (user_id, action, details)
                     VALUES (?, 'schedule_deleted', ?)
                 ''', (user_id, f'Schedule ID: {schedule_id}'))
@@ -745,17 +697,16 @@ class Database:
     
     def create_payment(self, user_id, plan, amount, payment_method, transaction_id=None):
         """Создать платёж"""
-        with self.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('''
+        # Using direct connection
+            self.cursor.execute('''
                 INSERT INTO payments (user_id, plan, amount, payment_method, transaction_id)
                 VALUES (?, ?, ?, ?, ?)
             ''', (user_id, plan, amount, payment_method, transaction_id))
             
-            payment_id = cursor.lastrowid
+            payment_id = self.cursor.lastrowid
             
             try:
-                cursor.execute('''
+                self.cursor.execute('''
                     INSERT INTO logs (user_id, action, details)
                     VALUES (?, 'payment_created', ?)
                 ''', (user_id, f'Payment ID: {payment_id}, Plan: {plan}, Amount: {amount}'))
@@ -767,38 +718,35 @@ class Database:
     
     def get_payment(self, payment_id):
         """Получить платёж по ID"""
-        with self.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('''
+        # Using direct connection
+            self.cursor.execute('''
                 SELECT p.*, u.username, u.first_name 
                 FROM payments p
                 LEFT JOIN users u ON p.user_id = u.telegram_id
                 WHERE p.id = ?
             ''', (payment_id,))
-            row = cursor.fetchone()
+            row = self.cursor.fetchone()
             return dict(row) if row else None
     
     def get_pending_payments(self):
         """Получить ожидающие платежи"""
-        with self.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('''
+        # Using direct connection
+            self.cursor.execute('''
                 SELECT p.*, u.username, u.first_name 
                 FROM payments p
                 LEFT JOIN users u ON p.user_id = u.telegram_id
                 WHERE p.status = 'pending'
                 ORDER BY p.created_at DESC
             ''')
-            return [dict(row) for row in cursor.fetchall()]
+            return [dict(row) for row in self.cursor.fetchall()]
     
     def approve_payment(self, payment_id, admin_id):
         """Одобрить платёж"""
-        with self.get_connection() as conn:
-            cursor = conn.cursor()
+        # Using direct connection
             
             # Получаем информацию о платеже
-            cursor.execute('SELECT * FROM payments WHERE id = ?', (payment_id,))
-            payment = cursor.fetchone()
+            self.cursor.execute('SELECT * FROM payments WHERE id = ?', (payment_id,))
+            payment = self.cursor.fetchone()
             
             if not payment or payment['status'] != 'pending':
                 return False
@@ -806,7 +754,7 @@ class Database:
             payment = dict(payment)
             
             # Обновляем статус платежа
-            cursor.execute('''
+            self.cursor.execute('''
                 UPDATE payments 
                 SET status = 'approved', approved_at = CURRENT_TIMESTAMP, approved_by = ?
                 WHERE id = ?
@@ -818,8 +766,8 @@ class Database:
             days = SUBSCRIPTION_PLANS.get(plan, {}).get('days', 30)
             
             # Получаем текущую дату окончания подписки
-            cursor.execute('SELECT subscription_expires FROM users WHERE telegram_id = ?', (payment['user_id'],))
-            user = cursor.fetchone()
+            self.cursor.execute('SELECT subscription_expires FROM users WHERE telegram_id = ?', (payment['user_id'],))
+            user = self.cursor.fetchone()
             current_expires = user['subscription_expires'] if user else None
             
             # Рассчитываем новую дату
@@ -838,14 +786,14 @@ class Database:
             else:
                 new_expires = datetime.now() + timedelta(days=days)
             
-            cursor.execute('''
+            self.cursor.execute('''
                 UPDATE users 
                 SET subscription_plan = ?, subscription_expires = ?
                 WHERE telegram_id = ?
             ''', (plan, new_expires, payment['user_id']))
             
             try:
-                cursor.execute('''
+                self.cursor.execute('''
                     INSERT INTO logs (user_id, action, details)
                     VALUES (?, 'payment_approved', ?)
                 ''', (payment['user_id'], f'Payment ID: {payment_id}, Plan: {plan}'))
@@ -857,20 +805,19 @@ class Database:
     
     def reject_payment(self, payment_id, admin_id):
         """Отклонить платёж"""
-        with self.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('''
+        # Using direct connection
+            self.cursor.execute('''
                 UPDATE payments 
                 SET status = 'rejected', approved_at = CURRENT_TIMESTAMP, approved_by = ?
                 WHERE id = ? AND status = 'pending'
             ''', (admin_id, payment_id))
             
             if cursor.rowcount > 0:
-                cursor.execute('SELECT user_id FROM payments WHERE id = ?', (payment_id,))
-                payment = cursor.fetchone()
+                self.cursor.execute('SELECT user_id FROM payments WHERE id = ?', (payment_id,))
+                payment = self.cursor.fetchone()
                 if payment:
                     try:
-                        cursor.execute('''
+                        self.cursor.execute('''
                             INSERT INTO logs (user_id, action, details)
                             VALUES (?, 'payment_rejected', ?)
                         ''', (payment['user_id'], f'Payment ID: {payment_id}'))
@@ -886,9 +833,8 @@ class Database:
     def add_log(self, user_id, action, details=None):
         """Добавить лог (безопасно, без вложенных транзакций)"""
         try:
-            with self.get_connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute('''
+            # Using direct connection
+                self.cursor.execute('''
                     INSERT INTO logs (user_id, action, details)
                     VALUES (?, ?, ?)
                 ''', (user_id, action, details))
@@ -898,74 +844,72 @@ class Database:
     
     def get_user_logs(self, user_id, limit=50):
         """Получить логи пользователя"""
-        with self.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('''
+        # Using direct connection
+            self.cursor.execute('''
                 SELECT * FROM logs 
                 WHERE user_id = ? 
                 ORDER BY created_at DESC 
                 LIMIT ?
             ''', (user_id, limit))
-            return [dict(row) for row in cursor.fetchall()]
+            return [dict(row) for row in self.cursor.fetchall()]
     
     # ==================== STATISTICS ====================
     
     def get_statistics(self):
         """Получить общую статистику"""
-        with self.get_connection() as conn:
-            cursor = conn.cursor()
+        # Using direct connection
             
             stats = {}
             
             # Всего пользователей
-            cursor.execute('SELECT COUNT(*) as count FROM users')
-            stats['total_users'] = cursor.fetchone()['count']
+            self.cursor.execute('SELECT COUNT(*) as count FROM users')
+            stats['total_users'] = self.cursor.fetchone()['count']
             
             # Активных сегодня
-            cursor.execute('''
+            self.cursor.execute('''
                 SELECT COUNT(*) as count FROM users 
                 WHERE DATE(last_active) = DATE('now')
             ''')
-            stats['active_today'] = cursor.fetchone()['count']
+            stats['active_today'] = self.cursor.fetchone()['count']
             
             # Новых за неделю
-            cursor.execute('''
+            self.cursor.execute('''
                 SELECT COUNT(*) as count FROM users 
                 WHERE created_at >= datetime('now', '-7 days')
             ''')
-            stats['new_this_week'] = cursor.fetchone()['count']
+            stats['new_this_week'] = self.cursor.fetchone()['count']
             
             # Доход за месяц
-            cursor.execute('''
+            self.cursor.execute('''
                 SELECT COALESCE(SUM(amount), 0) as total FROM payments 
                 WHERE status = 'approved' 
                 AND created_at >= datetime('now', '-30 days')
             ''')
-            stats['revenue_month'] = cursor.fetchone()['total']
+            stats['revenue_month'] = self.cursor.fetchone()['total']
             
             # Ожидающие платежи
-            cursor.execute('SELECT COUNT(*) as count FROM payments WHERE status = "pending"')
-            stats['pending_payments'] = cursor.fetchone()['count']
+            self.cursor.execute('SELECT COUNT(*) as count FROM payments WHERE status = "pending"')
+            stats['pending_payments'] = self.cursor.fetchone()['count']
             
             # Завершённые рассылки
-            cursor.execute('SELECT COUNT(*) as count FROM mailings WHERE status = "completed"')
-            stats['completed_mailings'] = cursor.fetchone()['count']
+            self.cursor.execute('SELECT COUNT(*) as count FROM mailings WHERE status = "completed"')
+            stats['completed_mailings'] = self.cursor.fetchone()['count']
             
             # Всего отправлено сообщений
-            cursor.execute('SELECT COALESCE(SUM(sent), 0) as total FROM mailings')
-            stats['total_messages_sent'] = cursor.fetchone()['total']
+            self.cursor.execute('SELECT COALESCE(SUM(sent), 0) as total FROM mailings')
+            stats['total_messages_sent'] = self.cursor.fetchone()['total']
             
             # Всего рассылок
-            cursor.execute('SELECT COUNT(*) as count FROM mailings')
-            stats['total_mailings'] = cursor.fetchone()['count']
+            self.cursor.execute('SELECT COUNT(*) as count FROM mailings')
+            stats['total_mailings'] = self.cursor.fetchone()['count']
             
             # Пользователи по тарифам
-            cursor.execute('''
+            self.cursor.execute('''
                 SELECT subscription_plan, COUNT(*) as count 
                 FROM users 
                 GROUP BY subscription_plan
             ''')
-            stats['users_by_plan'] = {row['subscription_plan']: row['count'] for row in cursor.fetchall()}
+            stats['users_by_plan'] = {row['subscription_plan']: row['count'] for row in self.cursor.fetchall()}
             
             return stats
     
