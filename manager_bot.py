@@ -2979,7 +2979,7 @@ def main():
     application.add_handler(CallbackQueryHandler(list_schedules_callback, pattern="^list_schedules$"))
     application.add_handler(CallbackQueryHandler(schedule_info_callback, pattern="^schedule_info_"))
     application.add_handler(CallbackQueryHandler(delete_schedule_callback, pattern="^delete_schedule_"))
-    application.add_handler(CallbackQueryHandler(confirm_delete_schedule_callback, pattern="^confirm_delete_schedule_"))
+    #application.add_handler(CallbackQueryHandler(confirm_delete_schedule_callback, pattern="^confirm_delete_schedule_"))
     
     # История
     application.add_handler(CallbackQueryHandler(history_all_callback, pattern="^history_all$"))
