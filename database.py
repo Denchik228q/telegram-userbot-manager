@@ -19,6 +19,94 @@ class Database:
         self.cursor = self.conn.cursor()  # <- ЭТА СТРОКА ОБЯЗАТЕЛЬНА!
         self._create_tables()
         logger.info("✅ Database initialized successfully")
+
+    async def start_auth(self, phone: str, user_id: int) -> Dict:
+        """Начать авторизацию Telegram аккаунта"""
+        try:
+            # API ID и Hash по умолчанию (или из переменных окружения)
+            api_id = int(os.getenv('TELEGRAM_API_ID', '35118006'))  # Замените на свой
+            api_hash = os.getenv('TELEGRAM_API_HASH', '9da42bc6c0367507231d2f33e9ad4873')  # Замените на свой
+            
+            # Создаем клиент
+            client = TelegramClient(
+                StringSession(),
+                api_id,
+                api_hash
+            )
+            
+            await client.connect()
+            
+            # Отправляем код
+            await client.send_code_request(phone)
+            
+            # Сохраняем клиент для дальнейшей авторизации
+            self.clients[user_id] = {
+                'client': client,
+                'phone': phone,
+                'api_id': api_id,
+                'api_hash': api_hash
+            }
+            
+            logger.info(f"✅ Code sent to {phone} for user {user_id}")
+            
+            return {
+                'success': True,
+                'message': 'Код отправлен'
+            }
+            
+        except Exception as e:
+            logger.error(f"Error in start_auth: {e}")
+            return {
+                'success': False,
+                'error': str(e)
+            }
+
+    async def verify_code(self, user_id: int, code: str, password: str = None) -> Dict:
+        """Проверить код и завершить авторизацию"""
+        try:
+            if user_id not in self.clients:
+                return {'success': False, 'error': 'Сессия не найдена'}
+            
+            session_data = self.clients[user_id]
+            client = session_data['client']
+            phone = session_data['phone']
+            
+            # Авторизуемся с кодом
+            try:
+                await client.sign_in(phone, code)
+            except SessionPasswordNeededError:
+                if not password:
+                    return {'success': False, 'need_password': True}
+                await client.sign_in(password=password)
+            
+            # Получаем session string
+            session_string = client.session.save()
+            
+            # Сохраняем в БД
+            account_id = self.db.create_account(
+                user_id=user_id,
+                phone=phone,
+                session_string=session_string,
+                api_id=session_data['api_id'],
+                api_hash=session_data['api_hash']
+            )
+            
+            # Очищаем временные данные
+            del self.clients[user_id]
+            
+            logger.info(f"✅ Account {phone} connected for user {user_id}")
+            
+            return {
+                'success': True,
+                'account_id': account_id
+            }
+            
+        except Exception as e:
+            logger.error(f"Error in verify_code: {e}")
+            return {
+                'success': False,
+                'error': str(e)
+            }
     
     def _get_connection(self):
         """Получить connection для текущего потока"""

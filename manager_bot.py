@@ -21,6 +21,7 @@ from telegram.ext import (
 from telegram.error import BadRequest, NetworkError, TimedOut
 from telethon import TelegramClient, errors as telethon_errors
 from telethon.sessions import StringSession
+from telethon.errors import SessionPasswordNeededError
 
 from config import *
 from database import Database
