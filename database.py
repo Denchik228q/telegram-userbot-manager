@@ -3,6 +3,7 @@
 """
 import sqlite3
 import logging
+from typing import Optional, List, Dict 
 from datetime import datetime, timedelta
 from contextlib import contextmanager
 from config import DATABASE_URL
