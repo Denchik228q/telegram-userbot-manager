@@ -2993,7 +2993,7 @@ def main():
     application.add_handler(CallbackQueryHandler(admin_payments_pending_callback, pattern="^admin_payments_pending$"))
     application.add_handler(CallbackQueryHandler(admin_stats_callback, pattern="^admin_stats$"))
     application.add_handler(CallbackQueryHandler(admin_backup_callback, pattern="^admin_backup$"))
-    application.add_handler(CallbackQueryHandler(create_backup_callback, pattern="^create_backup$"))
+    #application.add_handler(CallbackQueryHandler(create_backup_callback, pattern="^create_backup$"))
     application.add_handler(CallbackQueryHandler(admin_back_callback, pattern="^admin_back$"))
     
     # Общие
