@@ -2880,6 +2880,10 @@ def main():
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("cancel", cancel))
     application.add_handler(CommandHandler("admin", admin_panel_callback))
+    app.add_handler(CallbackQueryHandler(show_mailings, pattern='^mailings$'))
+    app.add_handler(CallbackQueryHandler(show_scheduler, pattern='^scheduler$'))
+    app.add_handler(CallbackQueryHandler(show_statistics, pattern='^statistics$'))
+    app.add_handler(CallbackQueryHandler(show_history, pattern='^history$'))
     
     # ==================== CONVERSATION HANDLERS ====================
     
