@@ -165,16 +165,21 @@ async def safe_edit_message(query, text, reply_markup=None, parse_mode='Markdown
 # ==================== COMMAND HANDLERS ====================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
     """Обработчик команды /start"""
-    user = update.effective_user
     
-    # Создаём или обновляем пользователя
-    db.create_user(
-        user_id=user_id,
-        username=user.username,
-        first_name=user.first_name,
-        last_name=user.last_name
-    )
+    user_id = update.effective_user.id  # <- ДОБАВИТЬ ЭТУ СТРОКУ
+    
+    # Проверяем существование пользователя
+    user = db.get_user(user_id)
+    
+    if not user:
+        db.create_user(
+            user_id=user_id,
+            username=update.effective_user.username,
+            first_name=update.effective_user.first_name,
+            last_name=update.effective_user.last_name
+        )
     
     user_data = db.get_user(user.id)
     
