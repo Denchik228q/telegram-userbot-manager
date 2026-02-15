@@ -170,7 +170,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # Создаём или обновляем пользователя
     db.create_user(
-        user.id=user.id,
+        user_id=user_id,
         username=user.username,
         first_name=user.first_name,
         last_name=user.last_name
