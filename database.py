@@ -1,4 +1,4 @@
-import sqlite3
+﻿import sqlite3
 import logging
 from typing import Optional, List, Dict
 from datetime import datetime

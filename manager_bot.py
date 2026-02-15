@@ -81,7 +81,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             InlineKeyboardButton("📤 Рассылки", callback_data='mailings')
         ],
         [
-            InlineKeyboardButton("⏰ Планировщик", callback_data='scheduler'),
+            InlineKeyboardButton("💳 Тарифы", callback_data='tariffs'),
             InlineKeyboardButton("📊 Статистика", callback_data='statistics')
         ],
         [
@@ -147,8 +147,29 @@ async def connect_account_start(update: Update, context: ContextTypes.DEFAULT_TY
     query = update.callback_query
     await query.answer()
     
+    user_id = query.from_user.id
+    
+    # Проверяем лимиты
+    limits = db.check_limits(user_id)
+    
+    if not limits['can_add_account']:
+        sub = db.get_user_subscription(user_id)
+        text = (
+            "❌ **Достигнут лимит аккаунтов**\n\n"
+            f"Ваш тариф: **{sub['plan'].title()}**\n"
+            f"Максимум аккаунтов: **{sub['limits']['accounts']}**\n\n"
+            "Обновите тариф для подключения большего количества аккаунтов."
+        )
+        keyboard = [
+            [InlineKeyboardButton("💳 Тарифы", callback_data='tariffs')],
+            [InlineKeyboardButton("🔙 Назад", callback_data='my_accounts')]
+        ]
+        await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+        return ConversationHandler.END
+    
     text = (
         "📱 **Подключение аккаунта**\n\n"
+        f"Осталось слотов: **{limits['accounts_left']}**\n\n"
         "Введите номер телефона в международном формате:\n"
         "Например: `+79991234567`"
     )
@@ -456,6 +477,67 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
 
+async def show_tariffs(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показать тарифы"""
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = query.from_user.id
+    sub = db.get_user_subscription(user_id)
+    
+    current_plan = sub['plan']
+    
+    plans = {
+        'free': {'emoji': '🆓', 'name': 'Бесплатный', 'price': '0₽', 'accounts': 1, 'messages': 100},
+        'standard': {'emoji': '⭐', 'name': 'Стандарт', 'price': '490₽/мес', 'accounts': 5, 'messages': 1000},
+        'premium': {'emoji': '💎', 'name': 'Премиум', 'price': '1990₽/мес', 'accounts': '∞', 'messages': '∞'}
+    }
+    
+    text = "💳 **Тарифы:**\n\n"
+    
+    for plan_id, plan in plans.items():
+        active = "✅ " if current_plan == plan_id else ""
+        text += f"{active}{plan['emoji']} **{plan['name']}** - {plan['price']}\n"
+        text += f"   📱 Аккаунтов: {plan['accounts']}\n"
+        text += f"   📤 Сообщений/день: {plan['messages']}\n\n"
+    
+    if current_plan != 'free':
+        text += f"📅 Ваша подписка до: {sub['end_date'][:10] if sub['end_date'] else 'Не указано'}\n\n"
+    
+    text += f"📊 Использовано сегодня: {sub['messages_sent']} сообщений"
+    
+    keyboard = []
+    
+    if current_plan == 'free':
+        keyboard.append([InlineKeyboardButton("⭐ Купить Стандарт", callback_data='buy_standard')])
+        keyboard.append([InlineKeyboardButton("💎 Купить Премиум", callback_data='buy_premium')])
+    elif current_plan == 'standard':
+        keyboard.append([InlineKeyboardButton("💎 Upgrade до Премиум", callback_data='buy_premium')])
+    
+    keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data='start')])
+    
+    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+
+async def buy_plan(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Покупка тарифа"""
+    query = update.callback_query
+    await query.answer()
+    
+    plan = 'standard' if 'standard' in query.data else 'premium'
+    price = '490₽' if plan == 'standard' else '1990₽'
+    
+    text = (
+        f"💳 **Оплата тарифа**\n\n"
+        f"Тариф: **{plan.title()}**\n"
+        f"Стоимость: **{price}**\n\n"
+        f"Для оплаты свяжитесь с @support\n"
+        f"После оплаты отправьте чек администратору."
+    )
+    
+    keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data='tariffs')]]
+    
+    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+
 # ==================== ГЛАВНАЯ ФУНКЦИЯ ====================
 
 def main():
@@ -475,6 +557,8 @@ def main():
     application.add_handler(CallbackQueryHandler(show_statistics, pattern='^statistics$'))
     application.add_handler(CallbackQueryHandler(show_history, pattern='^history$'))
     application.add_handler(CallbackQueryHandler(help_command, pattern='^help$'))
+    application.add_handler(CallbackQueryHandler(show_tariffs, pattern='^tariffs$'))
+    application.add_handler(CallbackQueryHandler(buy_plan, pattern='^buy_(standard|premium)$'))
     
     # ConversationHandler для подключения аккаунта
     connect_conv = ConversationHandler(
