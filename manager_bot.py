@@ -186,22 +186,46 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Формируем приветствие
     first_name = update.effective_user.first_name or "Пользователь"
     
+    # Основное меню
     keyboard = [
-        [InlineKeyboardButton("📱 Мои аккаунты", callback_data='my_accounts')],
-        [InlineKeyboardButton("📊 Статистика", callback_data='statistics')],
-        [InlineKeyboardButton("ℹ️ Помощь", callback_data='help')]
+        [
+            InlineKeyboardButton("📱 Мои аккаунты", callback_data='my_accounts'),
+            InlineKeyboardButton("📤 Рассылки", callback_data='mailings')
+        ],
+        [
+            InlineKeyboardButton("⏰ Планировщик", callback_data='scheduler'),
+            InlineKeyboardButton("📊 Статистика", callback_data='statistics')
+        ],
+        [
+            InlineKeyboardButton("📜 История", callback_data='history'),
+            InlineKeyboardButton("ℹ️ Помощь", callback_data='help')
+        ]
     ]
     
+    # Кнопка админ-панели для админа
     if user_id == ADMIN_ID:
-        keyboard.append([InlineKeyboardButton("👨‍💼 Админ-панель", callback_data='admin_panel')])
+        keyboard.append([
+            InlineKeyboardButton("👨‍💼 Админ-панель", callback_data='admin_panel')
+        ])
     
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    await update.message.reply_text(
+    welcome_text = (
         f"👋 Привет, {first_name}!\n\n"
-        f"🤖 Я бот для управления Telegram аккаунтами и рассылок.\n\n"
-        f"Выберите действие:",
-        reply_markup=reply_markup
+        f"🤖 Я бот для управления Telegram аккаунтами и массовых рассылок.\n\n"
+        f"📱 **Возможности:**\n"
+        f"• Подключение неограниченного числа аккаунтов\n"
+        f"• Массовые рассылки сообщений\n"
+        f"• Планировщик отложенных рассылок\n"
+        f"• Детальная статистика\n"
+        f"• История всех операций\n\n"
+        f"Выберите действие из меню:"
+    )
+    
+    await update.message.reply_text(
+        welcome_text,
+        reply_markup=reply_markup,
+        parse_mode='Markdown'
     )
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
