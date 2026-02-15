@@ -45,7 +45,7 @@ if not BOT_TOKEN or ADMIN_ID == 0:
 
 # Инициализация
 db = Database()
-backup_manager = BackupManager(db)
+backup_manager = BackupManager()
 
 # Состояния для ConversationHandler
 CONNECT_PHONE, CONNECT_CODE, CONNECT_PASSWORD = range(3)
