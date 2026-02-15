@@ -165,10 +165,8 @@ async def safe_edit_message(query, text, reply_markup=None, parse_mode='Markdown
 # ==================== COMMAND HANDLERS ====================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
     """Обработчик команды /start"""
-    
-    user_id = update.effective_user.id  # <- ДОБАВИТЬ ЭТУ СТРОКУ
+    user_id = update.effective_user.id
     
     # Проверяем существование пользователя
     user = db.get_user(user_id)
@@ -180,29 +178,31 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             first_name=update.effective_user.first_name,
             last_name=update.effective_user.last_name
         )
+        user = db.get_user(user_id)  # Получаем заново после создания
     
-    user_data = db.get_user(user.id)
+    # Обновляем активность
+    db.update_user_activity(user_id)
     
-    # Проверяем подписку
-    expires = user_data.get('subscription_expires')
-    if isinstance(expires, str):
-        expires = datetime.fromisoformat(expires)
+    # Формируем приветствие
+    first_name = update.effective_user.first_name or "Пользователь"
     
-    days_left = (expires - datetime.now()).days if expires else 0
+    keyboard = [
+        [InlineKeyboardButton("📱 Мои аккаунты", callback_data='my_accounts')],
+        [InlineKeyboardButton("📊 Статистика", callback_data='statistics')],
+        [InlineKeyboardButton("ℹ️ Помощь", callback_data='help')]
+    ]
     
-    plan_name = SUBSCRIPTION_PLANS.get(user_data['subscription_plan'], {}).get('name', 'Неизвестный')
+    if user_id == ADMIN_ID:
+        keyboard.append([InlineKeyboardButton("👨‍💼 Админ-панель", callback_data='admin_panel')])
     
-    text = TEXTS['start'].format(
-        subscription=plan_name,
-        days_left=max(0, days_left)
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.message.reply_text(
+        f"👋 Привет, {first_name}!\n\n"
+        f"🤖 Я бот для управления Telegram аккаунтами и рассылок.\n\n"
+        f"Выберите действие:",
+        reply_markup=reply_markup
     )
-    
-    keyboard = get_main_menu(is_admin=is_admin(user.id))
-    
-    if update.message:
-        await update.message.reply_text(text, reply_markup=keyboard, parse_mode='Markdown')
-    else:
-        await update.callback_query.message.edit_text(text, reply_markup=keyboard, parse_mode='Markdown')
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик команды /help"""
