@@ -55,6 +55,40 @@ BROADCAST_MESSAGE = 6
 # Хранилище временных данных
 user_sessions = {}
 
+def get_user_subscription_safe(user_id: int):
+    if hasattr(db, 'get_user_subscription'):
+        return db.get_user_subscription(user_id)
+    user = db.get_user(user_id) or {}
+    plan = user.get('plan', 'free') if isinstance(user, dict) else 'free'
+    limits_map = {
+        'free': {'accounts': 1, 'messages_per_day': 100},
+        'standard': {'accounts': 5, 'messages_per_day': 1000},
+        'premium': {'accounts': 9999, 'messages_per_day': 999999},
+    }
+    return {
+        'plan': plan,
+        'end_date': user.get('end_date') if isinstance(user, dict) else None,
+        'messages_sent': user.get('messages_sent_today', 0) if isinstance(user, dict) else 0,
+        'limits': limits_map.get(plan, limits_map['free']),
+    }
+
+def check_limits_safe(user_id: int):
+    if hasattr(db, 'check_limits'):
+        return db.check_limits(user_id)
+    sub = get_user_subscription_safe(user_id)
+    accounts = db.get_user_accounts(user_id)
+    used = len([a for a in accounts if a.get('is_active', 1)])
+    messages_sent = int(sub.get('messages_sent', 0) or 0)
+    limits = sub['limits']
+    return {
+        'plan': sub['plan'],
+        'can_add_account': used < limits['accounts'],
+        'accounts_left': max(0, limits['accounts'] - used),
+        'can_send_messages': messages_sent < limits['messages_per_day'],
+        'messages_left': max(0, limits['messages_per_day'] - messages_sent),
+        'limits': limits,
+    }
+
 # ==================== ОСНОВНЫЕ КОМАНДЫ ====================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -150,7 +184,7 @@ async def connect_account_start(update: Update, context: ContextTypes.DEFAULT_TY
     user_id = query.from_user.id
     
     # Проверяем лимиты
-    limits = db.check_limits(user_id)
+    limits = check_limits_safe(user_id)
     
     if not limits['can_add_account']:
         sub = db.get_user_subscription(user_id)
@@ -540,24 +574,33 @@ async def buy_plan(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ==================== ГЛАВНАЯ ФУНКЦИЯ ====================
 
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
+    logger.exception('Unhandled error: %s', context.error)
+    try:
+        if update and getattr(update, 'effective_message', None):
+            await update.effective_message.reply_text('⚠️ Произошла ошибка. Попробуйте ещё раз.')
+    except Exception:
+        pass
+
 def main():
     """Запуск бота"""
     logger.info("🚀 Starting Bot...")
     
     application = Application.builder().token(BOT_TOKEN).build()
+    application.add_error_handler(error_handler)
     
     # Обработчик /start
     application.add_handler(CommandHandler("start", start))
     
     # Обработчики callback
-    application.add_handler(CallbackQueryHandler(start, pattern='^start$'))
+    application.add_handler(CallbackQueryHandler(start, pattern='^(start|main_menu)$'))
     application.add_handler(CallbackQueryHandler(my_accounts, pattern='^my_accounts$'))
     application.add_handler(CallbackQueryHandler(show_mailings, pattern='^mailings$'))
     application.add_handler(CallbackQueryHandler(show_scheduler, pattern='^scheduler$'))
     application.add_handler(CallbackQueryHandler(show_statistics, pattern='^statistics$'))
     application.add_handler(CallbackQueryHandler(show_history, pattern='^history$'))
     application.add_handler(CallbackQueryHandler(help_command, pattern='^help$'))
-    application.add_handler(CallbackQueryHandler(show_tariffs, pattern='^tariffs$'))
+    application.add_handler(CallbackQueryHandler(show_tariffs, pattern='^(tariffs|subscriptions)$'))
     application.add_handler(CallbackQueryHandler(buy_plan, pattern='^buy_(standard|premium)$'))
     
     # ConversationHandler для подключения аккаунта
