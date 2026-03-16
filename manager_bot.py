@@ -575,6 +575,7 @@ async def show_tariffs(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def buy_plan(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
+
     """Покупка тарифа"""
     query = update.callback_query
     await query.answer()
