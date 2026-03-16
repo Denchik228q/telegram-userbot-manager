@@ -512,47 +512,69 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
 
 async def show_tariffs(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Показать тарифы"""
     query = update.callback_query
     await query.answer()
-    
-    user_id = query.from_user.id
-    sub = db.get_user_subscription(user_id)
-    
-    current_plan = sub['plan']
-    
-    plans = {
-        'free': {'emoji': '🆓', 'name': 'Бесплатный', 'price': '0₽', 'accounts': 1, 'messages': 100},
-        'standard': {'emoji': '⭐', 'name': 'Стандарт', 'price': '490₽/мес', 'accounts': 5, 'messages': 1000},
-        'premium': {'emoji': '💎', 'name': 'Премиум', 'price': '1990₽/мес', 'accounts': '∞', 'messages': '∞'}
+    sub = get_user_subscription_safe(query.from_user.id)
+
+    plan_names = {
+        'free': 'FREE',
+        'basic': 'BASIC',
+        'pro': 'PRO',
+        'ultimate': 'ULTIMATE',
+        'standard': 'STANDARD',
+        'premium': 'PREMIUM',
     }
-    
-    text = "💳 **Тарифы:**\n\n"
-    
-    for plan_id, plan in plans.items():
-        active = "✅ " if current_plan == plan_id else ""
-        text += f"{active}{plan['emoji']} **{plan['name']}** - {plan['price']}\n"
-        text += f"   📱 Аккаунтов: {plan['accounts']}\n"
-        text += f"   📤 Сообщений/день: {plan['messages']}\n\n"
-    
-    if current_plan != 'free':
-        text += f"📅 Ваша подписка до: {sub['end_date'][:10] if sub['end_date'] else 'Не указано'}\n\n"
-    
-    text += f"📊 Использовано сегодня: {sub['messages_sent']} сообщений"
-    
-    keyboard = []
-    
-    if current_plan == 'free':
-        keyboard.append([InlineKeyboardButton("⭐ Купить Стандарт", callback_data='buy_standard')])
-        keyboard.append([InlineKeyboardButton("💎 Купить Премиум", callback_data='buy_premium')])
-    elif current_plan == 'standard':
-        keyboard.append([InlineKeyboardButton("💎 Upgrade до Премиум", callback_data='buy_premium')])
-    
-    keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data='start')])
-    
-    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+
+    text = (
+        "💳 Тарифы
+
+"
+        "📦 BASIC — 399₽/мес
+"
+        "• 1 аккаунт
+"
+        "• 50 сообщений/день
+
+"
+        "💼 PRO — 1499₽/мес
+"
+        "• 5 аккаунтов
+"
+        "• 200 сообщений/день
+
+"
+        "👑 ULTIMATE — 4999₽/мес
+"
+        "• 10 аккаунтов
+"
+        "• Практически безлимит
+
+"
+        f"Ваш тариф: {plan_names.get(sub['plan'], sub['plan'])}
+"
+        f"Лимиты: {sub['limits']['accounts']} аккаунтов, {sub['limits']['messages_per_day']} сообщений/день
+
+"
+        "Реквизиты для оплаты:
+"
+        "💳 Карта: 2202 2063 7024 4223
+"
+        "📱 СБП/QIWI: +79381166009
+"
+        "💎 ЮMoney: 410012752155843"
+    )
+
+    keyboard = [
+        [InlineKeyboardButton('📦 Купить BASIC (399₽)', callback_data='buy_basic')],
+        [InlineKeyboardButton('💼 Купить PRO (1499₽)', callback_data='buy_pro')],
+        [InlineKeyboardButton('👑 Купить ULTIMATE (4999₽)', callback_data='buy_ultimate')],
+        [InlineKeyboardButton('🔙 Назад', callback_data='start')],
+    ]
+    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+
 
 async def buy_plan(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
     """Покупка тарифа"""
     query = update.callback_query
     await query.answer()
@@ -601,7 +623,7 @@ def main():
     application.add_handler(CallbackQueryHandler(show_history, pattern='^history$'))
     application.add_handler(CallbackQueryHandler(help_command, pattern='^help$'))
     application.add_handler(CallbackQueryHandler(show_tariffs, pattern='^(tariffs|subscriptions)$'))
-    application.add_handler(CallbackQueryHandler(buy_plan, pattern='^buy_(standard|premium)$'))
+    application.add_handler(CallbackQueryHandler(buy_plan, pattern='^buy_(basic|pro|ultimate|standard|premium)$'))
     
     # ConversationHandler для подключения аккаунта
     connect_conv = ConversationHandler(
