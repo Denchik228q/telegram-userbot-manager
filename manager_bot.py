@@ -554,27 +554,25 @@ async def show_tariffs(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def buy_plan(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
-
-
-    """Покупка тарифа"""
     query = update.callback_query
     await query.answer()
-    
-    plan = 'standard' if 'standard' in query.data else 'premium'
-    price = '490₽' if plan == 'standard' else '1990₽'
-    
-    text = (
-        f"💳 **Оплата тарифа**\n\n"
-        f"Тариф: **{plan.title()}**\n"
-        f"Стоимость: **{price}**\n\n"
-        f"Для оплаты свяжитесь с @support\n"
-        f"После оплаты отправьте чек администратору."
+
+    raw = query.data.replace('buy_', '')
+    aliases = {'standard': 'basic', 'premium': 'ultimate'}
+    plan = aliases.get(raw, raw)
+    context.user_data['selected_plan'] = plan
+
+    keyboard = [
+        [InlineKeyboardButton('💳 Банковская карта', callback_data=f'pay_method_{plan}_card')],
+        [InlineKeyboardButton('📱 СБП / QIWI', callback_data=f'pay_method_{plan}_sbp')],
+        [InlineKeyboardButton('💎 ЮMoney', callback_data=f'pay_method_{plan}_yoomoney')],
+        [InlineKeyboardButton('🔙 Назад', callback_data='tariffs')],
+    ]
+    await query.edit_message_text(
+        'Выберите способ оплаты:',
+        reply_markup=InlineKeyboardMarkup(keyboard),
     )
-    
-    keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data='tariffs')]]
-    
-    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+    return PAYMENT_METHOD
 
 # ==================== ГЛАВНАЯ ФУНКЦИЯ ====================
 
